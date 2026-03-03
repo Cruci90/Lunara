@@ -1,0 +1,17 @@
+:root { font-family: Arial, sans-serif; color-scheme: light; }
+body { margin: 0; background: #f6f7fb; color: #1c1e26; }
+header { background:#4762ff; color:white; padding:16px 20px; }
+main { max-width: 1100px; margin: 16px auto; padding: 0 12px; display: grid; gap: 12px; }
+.card { background: white; border-radius: 8px; padding: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.inline-form, .grid-form { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0; }
+.grid-form input, .grid-form select, .inline-form input, .inline-form select { padding:8px; }
+button { background:#4762ff; color:white; border:0; border-radius:6px; padding:8px 12px; cursor:pointer; }
+table { width:100%; border-collapse: collapse; }
+th, td { border-bottom:1px solid #e5e7ef; text-align:left; padding:6px; font-size:14px; }
+.recipe { border:1px solid #e8eaf5; border-radius:8px; padding:8px; margin:8px 0; }
+.badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; margin-left:6px; }
+.badge.quick { background:#ddfbe5; color:#1d7f3f; }
+.badge.elaborate { background:#fff2d9; color:#9d6a00; }
+.badge.batch { background:#e7ebff; color:#3848a7; }
+.pill-wrap { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px; }
+.pill { background:#eff2ff; border:1px solid #d8deff; border-radius:999px; padding:4px 8px; }
