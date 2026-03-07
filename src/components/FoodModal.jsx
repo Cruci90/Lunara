@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { formatShortDate, daysSince } from "../utils.js";
+import { useSwipeToClose } from "../hooks/useSwipeToClose.js";
 
 const ACCEPTANCE_LABELS = { liked: "Le encantó 😍", neutral: "Indiferente 😐", disliked: "No le gustó 😒" };
 const PREP_OPTIONS = ["bastones", "triturado", "puré", "dados", "rallado", "cocido", "al vapor", "horno", "crudo", "aplastado"];
@@ -21,12 +22,14 @@ export default function FoodModal({ food, data, onClose, onToggle, onUpdateDetai
   const [quantity,    setQuantity]    = useState(entry?.quantity    ?? "");
   const [acceptance,  setAcceptance]  = useState(entry?.acceptance  ?? "");
 
+  const swipeHandlers = useSwipeToClose(onClose);
+
   if (!food) return null;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label={`Detalles de ${food.name}`}>
       <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-handle" />
+        <div className="modal-handle" {...swipeHandlers} aria-hidden="true" />
 
         <div className="food-modal-emoji">{food.em}</div>
         <div className="food-modal-title">{food.name}</div>
@@ -100,13 +103,16 @@ export default function FoodModal({ food, data, onClose, onToggle, onUpdateDetai
         )}
 
         <div className="food-modal-actions" style={{ marginTop: 16 }}>
-          <button className={"btn-full " + (isIntroduced ? "btn-danger" : "btn-primary")}
-            onClick={() => { onToggle(food.id); if (isIntroduced) onClose(); }}>
+          <button
+            className={"btn-full " + (isIntroduced ? "btn-danger" : "btn-primary")}
+            aria-pressed={isIntroduced}
+            onClick={() => { onToggle(food.id); if (isIntroduced) onClose(); }}
+          >
             {isIntroduced ? "Quitar de introducidos" : "Marcar como introducido"}
           </button>
           {isIntroduced && (
             <button className="btn-full btn-warning" onClick={() => onReactionClick(food.id, reaction)}>
-              Registrar reacción
+              {reaction ? "Editar reacción" : "Registrar reacción"}
             </button>
           )}
         </div>

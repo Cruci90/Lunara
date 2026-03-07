@@ -29,8 +29,8 @@ export default function Header({ data, ageMonths, babyCount, onBabySelect, onSet
           <div className="header-name">{data.name}, {ageMonths}m</div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="settings-btn" title="Exportar PDF" onClick={onExportPDF}>📄</button>
-          <button className="settings-btn" onClick={onSettingsClick}>⚙️</button>
+          <button className="settings-btn" title="Exportar PDF" aria-label="Exportar PDF" onClick={onExportPDF}>📄</button>
+          <button className="settings-btn" title="Configuración" aria-label="Configuración y ajustes" onClick={onSettingsClick}>⚙️</button>
         </div>
       </div>
 

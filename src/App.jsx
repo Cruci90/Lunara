@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useBLWStore } from "./hooks/useBLWStore.js";
+import { useToast }    from "./hooks/useToast.js";
 import { getAgeInMonths } from "./utils.js";
 import { makeDateKey } from "./data/foods.js";
 
@@ -16,6 +17,7 @@ import PDFExport       from "./components/PDFExport.jsx";
 import FoodModal       from "./components/FoodModal.jsx";
 import ReactionModal   from "./components/ReactionModal.jsx";
 import DayModal        from "./components/DayModal.jsx";
+import Toast           from "./components/Toast.jsx";
 
 const TABS = [
   { key: "alimentos",  label: "Alimentos" },
@@ -37,6 +39,8 @@ export default function App() {
     setWeeklyPlanItem,
     resetStore,
   } = useBLWStore();
+
+  const { toast, showToast } = useToast();
 
   // ── UI state ─────────────────────────────────────────────────────────────
   const [showSetup,      setShowSetup]      = useState(false);
@@ -106,10 +110,12 @@ export default function App() {
         onExportPDF={() => setShowPDF(true)}
       />
 
-      <div className="tab-bar">
+      <div className="tab-bar" role="tablist" aria-label="Secciones de la aplicación">
         {TABS.map((t) => (
           <button
             key={t.key}
+            role="tab"
+            aria-selected={activeTab === t.key}
             className={`tab-btn${activeTab === t.key ? " active" : ""}`}
             onClick={() => setActiveTab(t.key)}
           >
@@ -124,7 +130,7 @@ export default function App() {
             data={activeBaby}
             ageMonths={ageMonths}
             onFoodClick={setSelectedFood}
-            onAddCustomFood={addCustomFood}
+            onAddCustomFood={(food) => { addCustomFood(food); showToast(`${food.em} ${food.name} añadido ✓`); }}
           />
         )}
         {activeTab === "alergenos" && <AllergenTab data={activeBaby} />}
@@ -168,8 +174,22 @@ export default function App() {
         food={selectedFood}
         data={activeBaby}
         onClose={() => setSelectedFood(null)}
-        onToggle={(foodId) => { toggleFood(foodId); setSelectedFood(null); }}
-        onUpdateDetails={updateFoodDetails}
+        onToggle={(foodId) => {
+          const wasIntroduced = !!activeBaby.foods[foodId];
+          const food = selectedFood;
+          toggleFood(foodId);
+          setSelectedFood(null);
+          showToast(
+            wasIntroduced
+              ? `${food?.em ?? ""} ${food?.name} quitado`
+              : `${food?.em ?? ""} ${food?.name} introducido ✓`,
+            wasIntroduced ? "info" : "success"
+          );
+        }}
+        onUpdateDetails={(foodId, details) => {
+          updateFoodDetails(foodId, details);
+          showToast("Detalles guardados ✓");
+        }}
         onReactionClick={handleReactionClick}
       />
 
@@ -177,7 +197,7 @@ export default function App() {
         foodId={reactionModal?.foodId ?? null}
         existingReaction={reactionModal?.existing ?? null}
         onClose={() => setReactionModal(null)}
-        onSave={saveReaction}
+        onSave={(foodId, data) => { saveReaction(foodId, data); setReactionModal(null); showToast("Reacción guardada", "warning"); }}
       />
 
       <DayModal
@@ -196,6 +216,8 @@ export default function App() {
           onClose={() => setShowPDF(false)}
         />
       )}
+
+      <Toast toast={toast} />
     </div>
   );
 }

@@ -52,18 +52,32 @@ export default function FoodGrid({ data, ageMonths, onFoodClick, onAddCustomFood
   return (
     <div>
       <div className="search-wrap">
-        <span className="search-icon">🔍</span>
-        <input className="search-input" placeholder="Buscar alimento..." value={search}
-          onChange={(e) => setSearch(e.target.value)} />
+        <span className="search-icon" aria-hidden="true">🔍</span>
+        <input
+          className="search-input"
+          placeholder="Buscar alimento..."
+          value={search}
+          aria-label="Buscar alimento"
+          onChange={(e) => setSearch(e.target.value)}
+        />
       </div>
 
-      <div className="filter-row">
+      <div className="filter-row" role="group" aria-label="Filtros de alimentos">
         {FILTERS.map((f) => (
-          <button key={f.key} className={"pill-btn" + (filter === f.key ? " active" : "")} onClick={() => setFilter(f.key)}>
+          <button
+            key={f.key}
+            className={"pill-btn" + (filter === f.key ? " active" : "")}
+            aria-pressed={filter === f.key}
+            onClick={() => setFilter(f.key)}
+          >
             {f.label}
           </button>
         ))}
-        <button className={"pill-btn" + (showAddCustom ? " active" : "")} onClick={() => setShowAddCustom((v) => !v)}>
+        <button
+          className={"pill-btn" + (showAddCustom ? " active" : "")}
+          aria-expanded={showAddCustom}
+          onClick={() => setShowAddCustom((v) => !v)}
+        >
           + Personalizado
         </button>
       </div>
@@ -106,7 +120,7 @@ export default function FoodGrid({ data, ageMonths, onFoodClick, onAddCustomFood
         ))}
       </div>
 
-      <div className="food-grid">
+      <div className="food-grid" role="list" aria-label="Alimentos">
         {filtered.map((food) => {
           const entry        = data.foods[food.id];
           const isIntroduced = !!entry;
@@ -120,19 +134,64 @@ export default function FoodGrid({ data, ageMonths, onFoodClick, onAddCustomFood
           else if (isTesting)    cardClass += " testing";
           else if (isIntroduced) cardClass += " introduced";
 
+          const label = [
+            food.name,
+            isTooYoung   ? `disponible a los +${food.age} meses` : "",
+            isIntroduced ? "introducido" : "pendiente",
+            food.al      ? "alérgeno" : "",
+            hasReaction  ? "reacción registrada" : "",
+            isTesting    ? "en período de prueba" : "",
+          ].filter(Boolean).join(", ");
+
           return (
-            <div key={food.id} className={cardClass} onClick={() => !isTooYoung && onFoodClick(food)}>
-              <div className="food-emoji">{food.em}</div>
+            <div
+              key={food.id}
+              role="listitem"
+              className={cardClass}
+              onClick={() => !isTooYoung && onFoodClick(food)}
+              aria-label={label}
+              tabIndex={isTooYoung ? -1 : 0}
+              onKeyDown={(e) => { if (!isTooYoung && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onFoodClick(food); } }}
+            >
+              <div className="food-emoji" aria-hidden="true">{food.em}</div>
               <div className="food-name">{food.name}</div>
-              {food.al      && <div className="food-allergen-badge">⚠️</div>}
-              {isIntroduced && <div className="food-check">{CHECK_SVG}</div>}
-              {isTooYoung   && <div className="food-age-badge">+{food.age}m</div>}
+              {food.al      && <div className="food-allergen-badge" aria-hidden="true">⚠️</div>}
+              {isIntroduced && <div className="food-check" aria-hidden="true">{CHECK_SVG}</div>}
+              {isTooYoung   && <div className="food-age-badge" aria-hidden="true">+{food.age}m</div>}
             </div>
           );
         })}
       </div>
 
-      {filtered.length === 0 && <div className="empty-state">Sin resultados</div>}
+      {filtered.length === 0 && (
+        <div className="empty-state" role="status">
+          {search ? (
+            <>
+              <div className="empty-state-icon">🔍</div>
+              <div className="empty-state-title">Sin resultados</div>
+              <div className="empty-state-desc">No hay alimentos que coincidan con "{search}"</div>
+            </>
+          ) : filter === "introducidos" ? (
+            <>
+              <div className="empty-state-icon">🥕</div>
+              <div className="empty-state-title">Nada introducido aún</div>
+              <div className="empty-state-desc">Pulsa en cualquier alimento para marcarlo como introducido</div>
+            </>
+          ) : filter === "alergenos" ? (
+            <>
+              <div className="empty-state-icon">⚠️</div>
+              <div className="empty-state-title">Sin alérgenos en esta categoría</div>
+              <div className="empty-state-desc">Cambia el filtro de categoría para ver más</div>
+            </>
+          ) : (
+            <>
+              <div className="empty-state-icon">🥦</div>
+              <div className="empty-state-title">Sin alimentos</div>
+              <div className="empty-state-desc">Prueba con otra categoría o busca por nombre</div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
