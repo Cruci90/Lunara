@@ -3,64 +3,56 @@ import { RECIPES } from "../data/recipes.js";
 import { getFood } from "../data/foods.js";
 
 const MEAL_FILTERS = ["todas", "desayuno", "comida", "cena", "snack", "merienda"];
+const TEXTURE_LABELS = { blando: "🥣 Blando", aplastable: "🥄 Aplastable", finger_food: "🖐️ Finger food" };
+const DIFF_LABELS    = { rapida: "⚡ Rápida", elaborada: "👨‍🍳 Elaborada", batch: "📦 Batch cooking" };
+const NUT_COLORS     = { alto: "#34C759", medio: "#FF9F0A", bajo: "#AEAEB2" };
 
-export default function RecipesTab({ data, ageMonths, babyName }) {
-  const [availabilityFilter, setAvailabilityFilter] = useState("disponibles");
-  const [mealFilter, setMealFilter] = useState("todas");
-  const [expanded, setExpanded] = useState({});
-  const [aiPrompt, setAiPrompt]  = useState("");
-  const [aiResult, setAiResult]  = useState("");
-  const [aiLoading, setAiLoading] = useState(false);
+export default function RecipesTab({ data, ageMonths, babyName, onToggleFavorite }) {
+  const [availFilter, setAvailFilter] = useState("disponibles");
+  const [mealFilter,  setMealFilter]  = useState("todas");
+  const [textFilter,  setTextFilter]  = useState("todas");
+  const [expanded,    setExpanded]    = useState({});
+  const [showShop,    setShowShop]    = useState(false);
+  const [aiPrompt,    setAiPrompt]    = useState("");
+  const [aiResult,    setAiResult]    = useState("");
+  const [aiLoading,   setAiLoading]   = useState(false);
 
-  const visibleRecipes = RECIPES.filter((r) => {
-    if (availabilityFilter === "disponibles") {
-      if (!r.ingredients.every((id) => !!data.foods[id])) return false;
-      if (r.age > ageMonths) return false;
-    }
-    if (mealFilter !== "todas" && !r.tags.includes(mealFilter)) return false;
+  const favorites = data.favorites ?? [];
+
+  const visible = RECIPES.filter((r) => {
+    if (availFilter === "disponibles" && (!r.ingredients.every((id) => !!data.foods[id]) || r.age > ageMonths)) return false;
+    if (availFilter === "favoritos"   && !favorites.includes(r.id)) return false;
+    if (mealFilter !== "todas"        && !r.tags.includes(mealFilter))  return false;
+    if (textFilter !== "todas"        && r.texture !== textFilter)       return false;
     return true;
   });
 
-  function toggleExpand(id) {
-    setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
-  }
+  // Lista de la compra: ingredientes faltantes de recetas favoritas
+  const shopList = favorites.flatMap((rid) => {
+    const recipe = RECIPES.find((r) => r.id === rid);
+    if (!recipe) return [];
+    return recipe.ingredients.filter((id) => !data.foods[id]).map((id) => ({ recipeId: rid, recipeName: recipe.name, foodId: id }));
+  });
+  const uniqueShopItems = shopList.reduce((acc, item) => {
+    if (!acc.find((x) => x.foodId === item.foodId)) acc.push(item);
+    return acc;
+  }, []);
 
   async function generateWithAI() {
     if (!aiPrompt.trim()) return;
-    setAiLoading(true);
-    setAiResult("");
-
-    const introducedNames = Object.keys(data.foods)
-      .map((id) => getFood(id)?.name)
-      .filter(Boolean);
-
+    setAiLoading(true); setAiResult("");
+    const names = Object.keys(data.foods).map((id) => getFood(id)?.name).filter(Boolean);
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("/api/recipe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          messages: [
-            {
-              role: "user",
-              content:
-                `Eres experto en BLW. Bebé ${ageMonths} meses. ` +
-                `Alimentos: ${introducedNames.join(", ")}. ` +
-                `Petición: "${aiPrompt}". ` +
-                `Genera UNA receta con SOLO esos alimentos. ` +
-                `Nombre, ingredientes, tiempo, pasos, consejos BLW. Español. Sin markdown.`,
-            },
-          ],
-        }),
+        body: JSON.stringify({ ageMonths, foods: names, prompt: aiPrompt }),
       });
       const json = await res.json();
-      const text = json.content?.map((c) => c.text ?? "").join("") ?? "";
-      setAiResult(text || "No se pudo generar.");
-    } catch {
-      setAiResult("Error al conectar con la IA. Inténtalo de nuevo.");
+      setAiResult(json.recipe || json.error || "No se pudo generar.");
+    } catch (err) {
+      setAiResult("Error de conexión.");
     }
-
     setAiLoading(false);
   }
 
@@ -68,71 +60,109 @@ export default function RecipesTab({ data, ageMonths, babyName }) {
     <div>
       <h2 className="section-title">Recetas</h2>
 
+      {/* Filtros de disponibilidad */}
       <div className="filter-row" style={{ marginTop: 12 }}>
-        <button
-          className={`pill-btn${availabilityFilter === "disponibles" ? " active" : ""}`}
-          onClick={() => setAvailabilityFilter("disponibles")}
-        >
-          Puedo hacer
-        </button>
-        <button
-          className={`pill-btn${availabilityFilter === "todas" ? " active" : ""}`}
-          onClick={() => setAvailabilityFilter("todas")}
-        >
-          Todas
+        {["disponibles", "todas", "favoritos"].map((k) => (
+          <button key={k} className={"pill-btn" + (availFilter === k ? " active" : "")} onClick={() => setAvailFilter(k)}>
+            {k === "disponibles" ? "Puedo hacer" : k === "todas" ? "Todas" : "❤️ Favoritas"}
+          </button>
+        ))}
+        <button className={"pill-btn" + (showShop ? " active" : "")} onClick={() => setShowShop((v) => !v)}>
+          🛒 Compra
         </button>
       </div>
 
+      {/* Lista de la compra */}
+      {showShop && (
+        <div style={{ padding: "14px 16px", background: "var(--cs)", border: "1.5px solid var(--bd)", borderRadius: "var(--rm)", marginBottom: 12 }}>
+          <div style={{ fontWeight: 700, color: "var(--t1)", marginBottom: 8 }}>🛒 Lista de la compra</div>
+          {uniqueShopItems.length === 0 ? (
+            <div style={{ fontSize: 13, color: "var(--t3)" }}>
+              {favorites.length === 0 ? "Marca recetas como favoritas para generar la lista." : "Tienes todos los ingredientes de tus favoritas. 🎉"}
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {uniqueShopItems.map((item) => {
+                const food = getFood(item.foodId);
+                return food ? (
+                  <div key={item.foodId} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13 }}>
+                    <span style={{ fontSize: 20 }}>{food.em}</span>
+                    <div>
+                      <div style={{ fontWeight: 600, color: "var(--t1)" }}>{food.name}</div>
+                      <div style={{ fontSize: 11, color: "var(--t3)" }}>Para: {item.recipeName}</div>
+                    </div>
+                  </div>
+                ) : null;
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Filtros de franja + textura */}
       <div className="filter-row">
         {MEAL_FILTERS.map((f) => (
-          <button
-            key={f}
-            className={`pill-btn sm${mealFilter === f ? " active" : ""}`}
-            onClick={() => setMealFilter(f)}
-          >
+          <button key={f} className={"pill-btn sm" + (mealFilter === f ? " active" : "")} onClick={() => setMealFilter(f)}>
             {f === "todas" ? "Todas" : f.charAt(0).toUpperCase() + f.slice(1)}
           </button>
         ))}
       </div>
+      <div className="filter-row">
+        {["todas", "blando", "aplastable", "finger_food"].map((t) => (
+          <button key={t} className={"pill-btn sm" + (textFilter === t ? " active" : "")} onClick={() => setTextFilter(t)}>
+            {t === "todas" ? "Cualquier textura" : TEXTURE_LABELS[t]}
+          </button>
+        ))}
+      </div>
 
-      {visibleRecipes.length === 0 ? (
+      {visible.length === 0 ? (
         <div className="empty-state">
-          {availabilityFilter === "disponibles"
-            ? "Introduce más alimentos para desbloquear recetas"
-            : "Sin recetas para esa combinación"}
+          {availFilter === "disponibles" ? "Introduce más alimentos para desbloquear recetas." :
+           availFilter === "favoritos"   ? "Aún no tienes favoritas." : "Sin recetas para esa combinación."}
         </div>
       ) : (
         <div className="recipe-list">
-          {visibleRecipes.map((recipe) => {
-            const canMake = recipe.ingredients.every((id) => !!data.foods[id]);
-            const missing = recipe.ingredients.filter((id) => !data.foods[id]);
+          {visible.map((r) => {
+            const canMake  = r.ingredients.every((id) => !!data.foods[id]);
+            const missing  = r.ingredients.filter((id) => !data.foods[id]);
+            const isFav    = favorites.includes(r.id);
 
             return (
-              <div
-                key={recipe.id}
-                className="recipe-card"
-                style={{ opacity: canMake ? 1 : 0.65 }}
-              >
+              <div key={r.id} className="recipe-card" style={{ opacity: canMake ? 1 : 0.65 }}>
                 <div className="recipe-card-header">
-                  <div className="recipe-name">{recipe.name}</div>
-                  <div className="recipe-time">{recipe.time}</div>
+                  <div className="recipe-name">{r.name}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div className="recipe-time">{r.time}</div>
+                    <button style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", lineHeight: 1 }}
+                      onClick={() => onToggleFavorite(r.id)} title={isFav ? "Quitar de favoritas" : "Añadir a favoritas"}>
+                      {isFav ? "❤️" : "🤍"}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="recipe-tags">
-                  {recipe.tags.map((t) => (
-                    <span key={t} className="recipe-tag">{t}</span>
-                  ))}
-                  <span className="recipe-tag age-tag">+{recipe.age}m</span>
+                  {r.tags.map((t) => <span key={t} className="recipe-tag">{t}</span>)}
+                  <span className="recipe-tag age-tag">+{r.age}m</span>
+                  <span className="recipe-tag" style={{ fontSize: 9 }}>{TEXTURE_LABELS[r.texture]}</span>
+                  <span className="recipe-tag" style={{ fontSize: 9 }}>{DIFF_LABELS[r.difficulty]}</span>
                 </div>
 
+                {/* Info nutricional */}
+                {r.nutrition && (
+                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                    {[["🩸 Hierro", r.nutrition.iron], ["💪 Proteína", r.nutrition.protein], ["🍊 Vit C", r.nutrition.vitaminC]].map(([label, level]) => (
+                      <div key={label} style={{ fontSize: 10, fontWeight: 600, color: NUT_COLORS[level], background: NUT_COLORS[level] + "18", padding: "2px 8px", borderRadius: 10 }}>
+                        {label}: {level}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 <div className="recipe-ingredients">
-                  {recipe.ingredients.map((id) => {
+                  {r.ingredients.map((id) => {
                     const food = getFood(id);
                     return food ? (
-                      <span
-                        key={id}
-                        className={`recipe-ingredient${data.foods[id] ? "" : " missing"}`}
-                      >
+                      <span key={id} className={"recipe-ingredient" + (data.foods[id] ? "" : " missing")}>
                         {food.em} {food.name}
                       </span>
                     ) : null;
@@ -140,17 +170,13 @@ export default function RecipesTab({ data, ageMonths, babyName }) {
                 </div>
 
                 {!canMake && missing.length > 0 && (
-                  <div className="recipe-missing">
-                    Falta: {missing.map((id) => getFood(id)?.name ?? id).join(", ")}
-                  </div>
+                  <div className="recipe-missing">Falta: {missing.map((id) => getFood(id)?.name ?? id).join(", ")}</div>
                 )}
 
-                {expanded[recipe.id] && (
-                  <p className="recipe-steps">{recipe.steps}</p>
-                )}
+                {expanded[r.id] && <p className="recipe-steps">{r.steps}</p>}
 
-                <button className="recipe-expand-btn" onClick={() => toggleExpand(recipe.id)}>
-                  {expanded[recipe.id] ? "Ocultar" : "Ver preparación →"}
+                <button className="recipe-expand-btn" onClick={() => setExpanded((p) => ({ ...p, [r.id]: !p[r.id] }))}>
+                  {expanded[r.id] ? "Ocultar" : "Ver preparación →"}
                 </button>
               </div>
             );
@@ -162,26 +188,17 @@ export default function RecipesTab({ data, ageMonths, babyName }) {
       <div className="ai-block">
         <div className="ai-badge">✦ IA</div>
         <div className="ai-title">Genera una receta</div>
-        <div className="ai-desc">
-          Receta personalizada con los alimentos de {babyName}.
-        </div>
+        <div className="ai-desc">Receta personalizada con los alimentos de {babyName}.</div>
         <div className="ai-input-row">
-          <input
-            className="ai-input"
-            placeholder="Ej: cena con pollo..."
-            value={aiPrompt}
-            onChange={(e) => setAiPrompt(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && generateWithAI()}
-          />
+          <input className="ai-input" placeholder="Ej: cena con pollo..." value={aiPrompt}
+            onChange={(e) => setAiPrompt(e.target.value)} onKeyDown={(e) => e.key === "Enter" && generateWithAI()} />
           <button className="ai-submit-btn" onClick={generateWithAI} disabled={aiLoading}>
             {aiLoading ? "..." : "Generar"}
           </button>
         </div>
         {aiLoading && <div className="ai-loading">Generando...</div>}
         {aiResult && !aiLoading && (
-          <div className="ai-result">
-            <div className="ai-result-text">{aiResult}</div>
-          </div>
+          <div className="ai-result"><div className="ai-result-text">{aiResult}</div></div>
         )}
       </div>
     </div>

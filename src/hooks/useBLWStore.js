@@ -1,164 +1,296 @@
 import { useState, useEffect, useCallback } from "react";
 
-const STORAGE_KEY = "blw-v4";
-const LEGACY_KEY = "blw-tracker-v2";
+const STORAGE_KEY = "blw-v5";
 
-function emptyState() {
-  return { babyName: "", babyBirthDate: "", foods: {}, reactions: {}, meals: {} };
+// ── Estructura de un bebé vacío ──────────────────────────────────────────────
+export function emptyBaby(id, name = "", birthDate = "") {
+  return {
+    id,
+    name,
+    birthDate,
+    prematuryNotes: "",
+    familyAllergyNotes: "",
+    pediatricNotes: "",
+    foods: {},        // { [foodId]: { date, preparation, quantity, acceptance } }
+    reactions: {},    // { [foodId]: { text, severity, date } }
+    meals: {},        // { [dateStr]: { [slot]: [foodId] } }
+    favorites: [],    // [recipeId]
+    customFoods: [],  // [{ id, name, cat, al, at, age, em }]
+    weeklyPlan: {},   // { [mondayISO]: { [dayIndex]: { [slot]: recipeId } } }
+  };
 }
 
-/** Lee el estado guardado desde window.storage (Claude artifact) o localStorage */
+function emptyStore() {
+  return { version: 2, disclaimerAccepted: false, activeBabyId: null, babies: {} };
+}
+
+function generateId() {
+  return `b_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+// ── Migración desde formato v1 (blw-v4) ─────────────────────────────────────
+function migrateV1(old) {
+  if (!old?.babyName) return null;
+  const id = generateId();
+  const baby = emptyBaby(id, old.babyName, old.babyBirthDate ?? "");
+
+  // Foods v1 era { id: "dateStr" }  →  v2 es { id: { date, ... } }
+  for (const [foodId, value] of Object.entries(old.introducedFoods ?? old.foods ?? {})) {
+    const dateStr = typeof value === "string" ? value : value?.date ?? "";
+    baby.foods[foodId] = { date: dateStr, preparation: "", quantity: "", acceptance: "" };
+  }
+
+  baby.reactions = old.reactions ?? {};
+  baby.meals     = old.meals ?? {};
+
+  return { ...emptyStore(), disclaimerAccepted: true, activeBabyId: id, babies: { [id]: baby } };
+}
+
+// ── Persistencia ─────────────────────────────────────────────────────────────
+async function getBackend() {
+  if (typeof window !== "undefined" && window.storage) {
+    return { get: (k) => window.storage.get(k), set: (k, v) => window.storage.set(k, v) };
+  }
+  return {
+    get: (k) => ({ value: localStorage.getItem(k) }),
+    set: (k, v) => localStorage.setItem(k, v),
+  };
+}
+
 async function loadFromStorage() {
   try {
-    // Intentar con window.storage (entorno Claude artifacts)
-    if (window.storage) {
-      let result;
-      try { result = await window.storage.get(STORAGE_KEY); } catch { result = null; }
+    const backend = await getBackend();
+    let result;
+
+    try { result = await backend.get(STORAGE_KEY); } catch { result = null; }
+    if (result?.value) {
+      const parsed = JSON.parse(result.value);
+      if (parsed.version === 2) return parsed;
+    }
+
+    // Intentar migrar desde v1
+    for (const key of ["blw-v4", "blw-tracker-v2"]) {
+      try { result = await backend.get(key); } catch { result = null; }
       if (result?.value) {
-        const data = JSON.parse(result.value);
-        return { ...emptyState(), ...data };
-      }
-      // Migrar desde versión anterior
-      try { result = await window.storage.get(LEGACY_KEY); } catch { result = null; }
-      if (result?.value) {
-        const old = JSON.parse(result.value);
-        const migrated = {
-          babyName: old.babyName ?? "",
-          babyBirthDate: old.babyBirthDate ?? "",
-          foods: old.introducedFoods ?? {},
-          reactions: old.reactions ?? {},
-          meals: {},
-        };
-        try { await window.storage.set(STORAGE_KEY, JSON.stringify(migrated)); } catch { /* noop */ }
-        return migrated;
+        const migrated = migrateV1(JSON.parse(result.value));
+        if (migrated) {
+          await backend.set(STORAGE_KEY, JSON.stringify(migrated));
+          return migrated;
+        }
       }
     }
-    // Fallback: localStorage estándar
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const data = JSON.parse(raw);
-      return { ...emptyState(), ...data };
-    }
-    return emptyState();
+    return emptyStore();
   } catch {
-    return emptyState();
+    return emptyStore();
   }
 }
 
-async function saveToStorage(data) {
+async function saveToStorage(store) {
   try {
-    const serialized = JSON.stringify(data);
-    if (window.storage) {
-      await window.storage.set(STORAGE_KEY, serialized);
-    } else {
-      localStorage.setItem(STORAGE_KEY, serialized);
-    }
+    const backend = await getBackend();
+    await backend.set(STORAGE_KEY, JSON.stringify(store));
   } catch { /* noop */ }
 }
 
-/**
- * Hook principal de estado de la app BLW.
- * Devuelve el estado actual y acciones para mutarlo.
- */
+// ── Hook principal ───────────────────────────────────────────────────────────
 export function useBLWStore() {
-  const [data, setData] = useState(null);
+  const [store, setStore]     = useState(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    loadFromStorage().then((loaded) => {
-      setData(loaded);
-      setIsLoading(false);
+    loadFromStorage().then((s) => { setStore(s); setIsLoading(false); });
+  }, []);
+
+  const persistStore = useCallback((next) => {
+    setStore(next);
+    saveToStorage(next);
+  }, []);
+
+  // Baby activo (los componentes usan este objeto igual que antes usaban `data`)
+  const activeBaby = store ? (store.babies[store.activeBabyId] ?? null) : null;
+
+  // Helper: muta el bebé activo sin duplicar lógica
+  function mutateBaby(updater) {
+    setStore((prev) => {
+      const id = prev.activeBabyId;
+      if (!id || !prev.babies[id]) return prev;
+      const updated = updater(structuredClone(prev.babies[id]));
+      const next = { ...prev, babies: { ...prev.babies, [id]: updated } };
+      saveToStorage(next);
+      return next;
+    });
+  }
+
+  // ── Disclaimer ───────────────────────────────────────────────────────────
+  const acceptDisclaimer = useCallback(() => {
+    setStore((prev) => {
+      const next = { ...prev, disclaimerAccepted: true };
+      saveToStorage(next);
+      return next;
     });
   }, []);
 
-  const persist = useCallback((newData) => {
-    setData(newData);
-    saveToStorage(newData);
+  // ── Bebés ────────────────────────────────────────────────────────────────
+  const addBaby = useCallback((name, birthDate, notes = {}) => {
+    const id = generateId();
+    const baby = emptyBaby(id, name, birthDate);
+    baby.prematuryNotes     = notes.prematuryNotes     ?? "";
+    baby.familyAllergyNotes = notes.familyAllergyNotes ?? "";
+    baby.pediatricNotes     = notes.pediatricNotes     ?? "";
+    setStore((prev) => {
+      const next = { ...prev, activeBabyId: id, babies: { ...prev.babies, [id]: baby } };
+      saveToStorage(next);
+      return next;
+    });
+    return id;
   }, []);
 
-  const reset = useCallback(() => {
-    const fresh = emptyState();
-    persist(fresh);
-    return fresh;
-  }, [persist]);
+  const updateBaby = useCallback((babyId, fields) => {
+    setStore((prev) => {
+      if (!prev.babies[babyId]) return prev;
+      const next = { ...prev, babies: { ...prev.babies, [babyId]: { ...prev.babies[babyId], ...fields } } };
+      saveToStorage(next);
+      return next;
+    });
+  }, []);
 
-  // --- Acciones de alimentos ---
+  const setActiveBaby = useCallback((babyId) => {
+    setStore((prev) => {
+      const next = { ...prev, activeBabyId: babyId };
+      saveToStorage(next);
+      return next;
+    });
+  }, []);
 
+  const deleteBaby = useCallback((babyId) => {
+    setStore((prev) => {
+      const babies = { ...prev.babies };
+      delete babies[babyId];
+      const ids = Object.keys(babies);
+      const next = { ...prev, activeBabyId: ids[0] ?? null, babies };
+      saveToStorage(next);
+      return next;
+    });
+  }, []);
+
+  // ── Alimentos ────────────────────────────────────────────────────────────
   const toggleFood = useCallback((foodId) => {
-    setData((prev) => {
-      const next = structuredClone(prev);
-      if (next.foods[foodId]) {
-        delete next.foods[foodId];
-        delete next.reactions[foodId];
+    mutateBaby((baby) => {
+      if (baby.foods[foodId]) {
+        delete baby.foods[foodId];
+        delete baby.reactions[foodId];
       } else {
-        next.foods[foodId] = new Date().toISOString().split("T")[0];
+        baby.foods[foodId] = {
+          date: new Date().toISOString().split("T")[0],
+          preparation: "", quantity: "", acceptance: "",
+        };
       }
-      saveToStorage(next);
-      return next;
+      return baby;
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const registerFoodOnDate = useCallback((foodId, dateStr) => {
-    setData((prev) => {
-      if (prev.foods[foodId]) return prev; // ya introducido, no sobreescribir
-      const next = structuredClone(prev);
-      next.foods[foodId] = dateStr;
-      saveToStorage(next);
-      return next;
-    });
-  }, []);
-
-  // --- Acciones de reacciones ---
-
-  const saveReaction = useCallback((foodId, text, severity) => {
-    setData((prev) => {
-      const next = structuredClone(prev);
-      next.reactions[foodId] = {
-        text,
-        severity,
-        date: new Date().toISOString().split("T")[0],
+  const registerFoodOnDate = useCallback((foodId, dateStr, details = {}) => {
+    mutateBaby((baby) => {
+      if (baby.foods[foodId]) return baby;
+      baby.foods[foodId] = {
+        date: dateStr,
+        preparation: details.preparation ?? "",
+        quantity:    details.quantity    ?? "",
+        acceptance:  details.acceptance  ?? "",
       };
-      saveToStorage(next);
-      return next;
+      return baby;
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // --- Acciones del diario de comidas ---
-
-  const addMeal = useCallback((dateStr, slot, foodId) => {
-    setData((prev) => {
-      const next = structuredClone(prev);
-      if (!next.meals[dateStr]) next.meals[dateStr] = {};
-      if (!next.meals[dateStr][slot]) next.meals[dateStr][slot] = [];
-      if (!next.meals[dateStr][slot].includes(foodId)) {
-        next.meals[dateStr][slot].push(foodId);
-      }
-      saveToStorage(next);
-      return next;
+  const updateFoodDetails = useCallback((foodId, details) => {
+    mutateBaby((baby) => {
+      if (!baby.foods[foodId]) return baby;
+      baby.foods[foodId] = { ...baby.foods[foodId], ...details };
+      return baby;
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const addCustomFood = useCallback((food) => {
+    mutateBaby((baby) => {
+      baby.customFoods = [...(baby.customFoods ?? []), { ...food, id: `custom_${Date.now()}` }];
+      return baby;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Reacciones ───────────────────────────────────────────────────────────
+  const saveReaction = useCallback((foodId, text, severity) => {
+    mutateBaby((baby) => {
+      baby.reactions[foodId] = { text, severity, date: new Date().toISOString().split("T")[0] };
+      return baby;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Diario de comidas ────────────────────────────────────────────────────
+  const addMeal = useCallback((dateStr, slot, foodId) => {
+    mutateBaby((baby) => {
+      if (!baby.meals[dateStr]) baby.meals[dateStr] = {};
+      if (!baby.meals[dateStr][slot]) baby.meals[dateStr][slot] = [];
+      if (!baby.meals[dateStr][slot].includes(foodId)) baby.meals[dateStr][slot].push(foodId);
+      return baby;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const removeMeal = useCallback((dateStr, slot, foodId) => {
-    setData((prev) => {
-      const next = structuredClone(prev);
-      if (!next.meals?.[dateStr]?.[slot]) return prev;
-      next.meals[dateStr][slot] = next.meals[dateStr][slot].filter((id) => id !== foodId);
-      if (next.meals[dateStr][slot].length === 0) delete next.meals[dateStr][slot];
-      if (Object.keys(next.meals[dateStr]).length === 0) delete next.meals[dateStr];
-      saveToStorage(next);
-      return next;
+    mutateBaby((baby) => {
+      if (!baby.meals?.[dateStr]?.[slot]) return baby;
+      baby.meals[dateStr][slot] = baby.meals[dateStr][slot].filter((id) => id !== foodId);
+      if (!baby.meals[dateStr][slot].length) delete baby.meals[dateStr][slot];
+      if (!Object.keys(baby.meals[dateStr]).length) delete baby.meals[dateStr];
+      return baby;
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── Favoritos ────────────────────────────────────────────────────────────
+  const toggleFavorite = useCallback((recipeId) => {
+    mutateBaby((baby) => {
+      const favs = baby.favorites ?? [];
+      baby.favorites = favs.includes(recipeId)
+        ? favs.filter((id) => id !== recipeId)
+        : [...favs, recipeId];
+      return baby;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Planificador semanal ─────────────────────────────────────────────────
+  const setWeeklyPlanItem = useCallback((mondayISO, dayIndex, slot, recipeId) => {
+    mutateBaby((baby) => {
+      if (!baby.weeklyPlan[mondayISO]) baby.weeklyPlan[mondayISO] = {};
+      if (!baby.weeklyPlan[mondayISO][dayIndex]) baby.weeklyPlan[mondayISO][dayIndex] = {};
+      if (recipeId) baby.weeklyPlan[mondayISO][dayIndex][slot] = recipeId;
+      else delete baby.weeklyPlan[mondayISO][dayIndex][slot];
+      return baby;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Reset ────────────────────────────────────────────────────────────────
+  const resetStore = useCallback(() => { persistStore(emptyStore()); }, [persistStore]);
+
   return {
-    data,
+    store,
     isLoading,
-    persist,
-    reset,
-    toggleFood,
-    registerFoodOnDate,
+    activeBaby,
+    persistStore,
+    acceptDisclaimer,
+    addBaby, updateBaby, setActiveBaby, deleteBaby,
+    toggleFood, registerFoodOnDate, updateFoodDetails, addCustomFood,
     saveReaction,
-    addMeal,
-    removeMeal,
+    addMeal, removeMeal,
+    toggleFavorite,
+    setWeeklyPlanItem,
+    resetStore,
   };
 }
