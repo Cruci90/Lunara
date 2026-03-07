@@ -197,7 +197,11 @@ export default function App() {
         foodId={reactionModal?.foodId ?? null}
         existingReaction={reactionModal?.existing ?? null}
         onClose={() => setReactionModal(null)}
-        onSave={(foodId, data) => { saveReaction(foodId, data); setReactionModal(null); showToast("Reacción guardada", "warning"); }}
+        onSave={(foodId, text, severity) => {
+          saveReaction(foodId, text, severity);
+          setReactionModal(null);
+          showToast("Reacción guardada", "warning");
+        }}
       />
 
       <DayModal
