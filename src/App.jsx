@@ -3,35 +3,49 @@ import { useBLWStore } from "./hooks/useBLWStore.js";
 import { getAgeInMonths } from "./utils.js";
 import { makeDateKey } from "./data/foods.js";
 
-import SetupScreen    from "./components/SetupScreen.jsx";
-import Header         from "./components/Header.jsx";
-import FoodGrid       from "./components/FoodGrid.jsx";
-import AllergenTab    from "./components/AllergenTab.jsx";
-import CalendarTab    from "./components/CalendarTab.jsx";
-import RecipesTab     from "./components/RecipesTab.jsx";
-import FoodModal      from "./components/FoodModal.jsx";
-import ReactionModal  from "./components/ReactionModal.jsx";
-import DayModal       from "./components/DayModal.jsx";
+import DisclaimerModal from "./components/DisclaimerModal.jsx";
+import SetupScreen     from "./components/SetupScreen.jsx";
+import BabySelector    from "./components/BabySelector.jsx";
+import Header          from "./components/Header.jsx";
+import FoodGrid        from "./components/FoodGrid.jsx";
+import AllergenTab     from "./components/AllergenTab.jsx";
+import CalendarTab     from "./components/CalendarTab.jsx";
+import RecipesTab      from "./components/RecipesTab.jsx";
+import WeeklyPlanner   from "./components/WeeklyPlanner.jsx";
+import PDFExport       from "./components/PDFExport.jsx";
+import FoodModal       from "./components/FoodModal.jsx";
+import ReactionModal   from "./components/ReactionModal.jsx";
+import DayModal        from "./components/DayModal.jsx";
 
 const TABS = [
   { key: "alimentos",  label: "Alimentos" },
   { key: "alergenos",  label: "Alérgenos" },
   { key: "calendario", label: "Calendario" },
   { key: "recetas",    label: "Recetas" },
+  { key: "semana",     label: "Semana" },
 ];
 
 export default function App() {
   const {
-    data, isLoading, persist,
-    reset, toggleFood, registerFoodOnDate, saveReaction, addMeal, removeMeal,
+    store, isLoading, activeBaby,
+    acceptDisclaimer,
+    addBaby, updateBaby, setActiveBaby, deleteBaby,
+    toggleFood, registerFoodOnDate, updateFoodDetails, addCustomFood,
+    saveReaction,
+    addMeal, removeMeal,
+    toggleFavorite,
+    setWeeklyPlanItem,
+    resetStore,
   } = useBLWStore();
 
-  // ── UI state ──────────────────────────────────────────────────────────────
-  const [showSetup,   setShowSetup]   = useState(false);
-  const [activeTab,   setActiveTab]   = useState("alimentos");
-  const [selectedFood, setSelectedFood] = useState(null);   // para FoodModal
-  const [reactionModal, setReactionModal] = useState(null); // { foodId, existing }
-  const [selectedDay,   setSelectedDay]   = useState(null); // para DayModal
+  // ── UI state ─────────────────────────────────────────────────────────────
+  const [showSetup,      setShowSetup]      = useState(false);
+  const [showBabies,     setShowBabies]     = useState(false);
+  const [showPDF,        setShowPDF]        = useState(false);
+  const [activeTab,      setActiveTab]      = useState("alimentos");
+  const [selectedFood,   setSelectedFood]   = useState(null);
+  const [reactionModal,  setReactionModal]  = useState(null); // { foodId, existing }
+  const [selectedDay,    setSelectedDay]    = useState(null);
 
   // ── Loading ───────────────────────────────────────────────────────────────
   if (isLoading) {
@@ -45,21 +59,24 @@ export default function App() {
     );
   }
 
-  // ── Setup ─────────────────────────────────────────────────────────────────
-  if (showSetup || !data?.babyName) {
+  // ── Disclaimer ────────────────────────────────────────────────────────────
+  if (!store?.disclaimerAccepted) {
+    return <DisclaimerModal onAccept={acceptDisclaimer} />;
+  }
+
+  // ── Setup (primer bebé) ───────────────────────────────────────────────────
+  if (!activeBaby || showSetup) {
     return (
       <SetupScreen
-        data={data ?? { babyName: "", babyBirthDate: "" }}
-        onChange={(updated) => persist({ ...data, ...updated })}
-        onStart={() => {
-          persist(data);
+        onStart={(name, birthDate, notes) => {
+          addBaby(name, birthDate, notes);
           setShowSetup(false);
         }}
       />
     );
   }
 
-  const ageMonths = getAgeInMonths(data.babyBirthDate);
+  const ageMonths = getAgeInMonths(activeBaby.birthDate);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   function handleDayClick(year, month, day) {
@@ -71,25 +88,22 @@ export default function App() {
     setReactionModal({ foodId, existing });
   }
 
-  function handleToggleFood(foodId) {
-    toggleFood(foodId);
-    setSelectedFood(null);
-  }
-
   function handleReset() {
-    if (window.confirm("¿Eliminar todos los datos? Esta acción no se puede deshacer.")) {
-      reset();
-      setShowSetup(true);
+    if (window.confirm("¿Eliminar TODOS los datos? Esta acción no se puede deshacer.")) {
+      resetStore();
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="app">
       <Header
-        data={data}
+        data={activeBaby}
         ageMonths={ageMonths}
+        babyCount={Object.keys(store.babies).length}
+        onBabySelect={() => setShowBabies(true)}
         onSettingsClick={() => setShowSetup(true)}
+        onExportPDF={() => setShowPDF(true)}
       />
 
       <div className="tab-bar">
@@ -107,38 +121,55 @@ export default function App() {
       <div className="tab-content">
         {activeTab === "alimentos" && (
           <FoodGrid
-            data={data}
+            data={activeBaby}
             ageMonths={ageMonths}
             onFoodClick={setSelectedFood}
+            onAddCustomFood={addCustomFood}
           />
         )}
-        {activeTab === "alergenos" && (
-          <AllergenTab data={data} />
-        )}
+        {activeTab === "alergenos" && <AllergenTab data={activeBaby} />}
         {activeTab === "calendario" && (
-          <CalendarTab data={data} onDayClick={handleDayClick} />
+          <CalendarTab data={activeBaby} onDayClick={handleDayClick} />
         )}
         {activeTab === "recetas" && (
           <RecipesTab
-            data={data}
+            data={activeBaby}
             ageMonths={ageMonths}
-            babyName={data.babyName}
+            babyName={activeBaby.name}
+            onToggleFavorite={toggleFavorite}
+          />
+        )}
+        {activeTab === "semana" && (
+          <WeeklyPlanner
+            data={activeBaby}
+            ageMonths={ageMonths}
+            onSetItem={setWeeklyPlanItem}
           />
         )}
       </div>
 
       <div className="footer">
-        <button className="reset-btn" onClick={handleReset}>
-          Reiniciar datos
-        </button>
+        <button className="reset-btn" onClick={handleReset}>Reiniciar datos</button>
       </div>
 
-      {/* Modales */}
+      {/* ── Modales ── */}
+      {showBabies && (
+        <BabySelector
+          store={store}
+          activeBaby={activeBaby}
+          onSelect={setActiveBaby}
+          onAdd={(name, birthDate, notes) => addBaby(name, birthDate, notes)}
+          onDelete={deleteBaby}
+          onClose={() => setShowBabies(false)}
+        />
+      )}
+
       <FoodModal
         food={selectedFood}
-        data={data}
+        data={activeBaby}
         onClose={() => setSelectedFood(null)}
-        onToggle={handleToggleFood}
+        onToggle={(foodId) => { toggleFood(foodId); setSelectedFood(null); }}
+        onUpdateDetails={updateFoodDetails}
         onReactionClick={handleReactionClick}
       />
 
@@ -146,17 +177,25 @@ export default function App() {
         foodId={reactionModal?.foodId ?? null}
         existingReaction={reactionModal?.existing ?? null}
         onClose={() => setReactionModal(null)}
-        onSave={(foodId, text, severity) => saveReaction(foodId, text, severity)}
+        onSave={saveReaction}
       />
 
       <DayModal
         selectedDay={selectedDay}
-        data={data}
+        data={activeBaby}
         onClose={() => setSelectedDay(null)}
         onRegisterFood={registerFoodOnDate}
         onAddMeal={addMeal}
         onRemoveMeal={removeMeal}
       />
+
+      {showPDF && (
+        <PDFExport
+          baby={activeBaby}
+          ageMonths={ageMonths}
+          onClose={() => setShowPDF(false)}
+        />
+      )}
     </div>
   );
 }

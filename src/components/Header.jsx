@@ -1,31 +1,37 @@
 import { FOODS, ALLERGENS } from "../data/foods.js";
 import { daysSince } from "../utils.js";
 
-export default function Header({ data, ageMonths, onSettingsClick }) {
+export default function Header({ data, ageMonths, babyCount, onBabySelect, onSettingsClick, onExportPDF }) {
   const introducedIds = Object.keys(data.foods);
-  const totalFoods = FOODS.length;
-  const progressPct = Math.round((introducedIds.length / totalFoods) * 100);
+  const totalFoods    = FOODS.length + (data.customFoods?.length ?? 0);
+  const progressPct   = Math.round((introducedIds.length / totalFoods) * 100);
 
-  // Cuenta alérgenos tolerados (al menos un alimento del grupo introducido sin reacción)
   const allergensDone = ALLERGENS.filter((a) =>
     FOODS.some((f) => f.at === a.name && data.foods[f.id])
   ).length;
 
-  // Alimentos alérgenos en período de observación (< 3 días desde introducción)
+  // foods[id].date en formato nuevo (objeto) — compatible con string legado
+  function getFoodDate(entry) {
+    return typeof entry === "string" ? entry : entry?.date ?? "";
+  }
+
   const inTrialAllergens = FOODS.filter(
-    (f) => f.al && data.foods[f.id] && daysSince(data.foods[f.id]) < 3
+    (f) => f.al && data.foods[f.id] && daysSince(getFoodDate(data.foods[f.id])) < 3
   );
 
   return (
     <div className="header">
       <div className="header-row">
-        <div>
-          <div className="header-subtitle">Baby Led Weaning</div>
-          <div className="header-name">
-            {data.babyName}, {ageMonths}m
+        <div style={{ cursor: babyCount > 1 ? "pointer" : "default" }} onClick={babyCount > 1 ? onBabySelect : undefined}>
+          <div className="header-subtitle">
+            Baby Led Weaning{babyCount > 1 && <span style={{ marginLeft: 6, fontSize: 12, color: "var(--bl)" }}>▾ cambiar</span>}
           </div>
+          <div className="header-name">{data.name}, {ageMonths}m</div>
         </div>
-        <button className="settings-btn" onClick={onSettingsClick}>⚙️</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="settings-btn" title="Exportar PDF" onClick={onExportPDF}>📄</button>
+          <button className="settings-btn" onClick={onSettingsClick}>⚙️</button>
+        </div>
       </div>
 
       <div className="stats-grid">
@@ -34,9 +40,7 @@ export default function Header({ data, ageMonths, onSettingsClick }) {
           <div className="stat-label">Alimentos</div>
         </div>
         <div className="stat-card">
-          <div className="stat-value">
-            {allergensDone}<span>/{ALLERGENS.length}</span>
-          </div>
+          <div className="stat-value">{allergensDone}<span>/{ALLERGENS.length}</span></div>
           <div className="stat-label">Alérgenos</div>
         </div>
         <div className="stat-card">
@@ -56,13 +60,11 @@ export default function Header({ data, ageMonths, onSettingsClick }) {
           <div className="allergen-warning-icon">⏳</div>
           <div>
             <div className="allergen-warning-title">Regla de los 3 días</div>
-            <div className="allergen-warning-desc">
-              Espera antes de introducir otro alérgeno
-            </div>
+            <div className="allergen-warning-desc">Espera antes de introducir otro alérgeno</div>
             <div className="allergen-warning-chips">
               {inTrialAllergens.map((f) => (
                 <span key={f.id} className="allergen-chip">
-                  {f.em} {f.name} · {3 - daysSince(data.foods[f.id])}d
+                  {f.em} {f.name} · {3 - daysSince(getFoodDate(data.foods[f.id]))}d
                 </span>
               ))}
             </div>

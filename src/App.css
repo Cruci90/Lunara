@@ -725,3 +725,9 @@ body {
 /* ── Footer ─────────────────────────────────────────────────────── */
 .footer       { padding: 24px 20px 40px; text-align: center; }
 .reset-btn    { font-size: 13px; color: var(--t3); font-family: var(--ft); background: none; border: none; cursor: pointer; padding: 8px 16px; }
+
+/* ── Print (PDF Export) ──────────────────────────────────────────── */
+@media print {
+  .app, .tab-bar, .footer, .modal-overlay { display: none !important; }
+  #pdf-report { position: static !important; }
+}
