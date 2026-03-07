@@ -35,30 +35,26 @@ export default function RecipesTab({ data, ageMonths, babyName }) {
       .filter(Boolean);
 
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      // Llamada al proxy del servidor — la API key nunca llega al navegador
+      const res = await fetch("/api/recipe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          messages: [
-            {
-              role: "user",
-              content:
-                `Eres experto en BLW. Bebé ${ageMonths} meses. ` +
-                `Alimentos: ${introducedNames.join(", ")}. ` +
-                `Petición: "${aiPrompt}". ` +
-                `Genera UNA receta con SOLO esos alimentos. ` +
-                `Nombre, ingredientes, tiempo, pasos, consejos BLW. Español. Sin markdown.`,
-            },
-          ],
+          ageMonths,
+          foods: introducedNames,
+          prompt: aiPrompt,
         }),
       });
-      const json = await res.json();
-      const text = json.content?.map((c) => c.text ?? "").join("") ?? "";
-      setAiResult(text || "No se pudo generar.");
-    } catch {
-      setAiResult("Error al conectar con la IA. Inténtalo de nuevo.");
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error ?? `HTTP ${res.status}`);
+      }
+
+      const { recipe } = await res.json();
+      setAiResult(recipe || "No se pudo generar.");
+    } catch (err) {
+      setAiResult(`Error: ${err.message}`);
     }
 
     setAiLoading(false);
