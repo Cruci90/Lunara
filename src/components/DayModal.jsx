@@ -3,9 +3,9 @@ import { FOODS, MEAL_SLOTS, getFood } from "../data/foods.js";
 import { formatFullDate } from "../utils.js";
 
 /** Vista: resumen del día → elige acción */
-function DaySummary({ dateStr, dayFoods, dayMeals, onNewFood, onMealLog }) {
+function DaySummary({ dateStr, dayFoods, dayMeals, dayNotes, onNewFood, onMealLog }) {
   const mealSlotsWithData = MEAL_SLOTS.filter(
-    (s) => dayMeals[s.key]?.length > 0
+    (s) => dayMeals[s.key]?.length > 0 || dayNotes[s.key]
   );
 
   return (
@@ -33,14 +33,21 @@ function DaySummary({ dateStr, dayFoods, dayMeals, onNewFood, onMealLog }) {
               <div style={{ fontSize: 13, fontWeight: 700, color: "var(--t1)", marginBottom: 4 }}>
                 {slot.emoji} {slot.label}
               </div>
-              <div className="chip-list">
-                {dayMeals[slot.key].map((id) => {
-                  const food = getFood(id);
-                  return food ? (
-                    <span key={id} className="chip">{food.em} {food.name}</span>
-                  ) : null;
-                })}
-              </div>
+              {dayMeals[slot.key]?.length > 0 && (
+                <div className="chip-list">
+                  {dayMeals[slot.key].map((id) => {
+                    const food = getFood(id);
+                    return food ? (
+                      <span key={id} className="chip">{food.em} {food.name}</span>
+                    ) : null;
+                  })}
+                </div>
+              )}
+              {dayNotes[slot.key] && (
+                <div style={{ fontSize: 12, color: "var(--t2)", marginTop: 2 }}>
+                  💬 {dayNotes[slot.key]}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -166,11 +173,13 @@ function RegisterFoodView({ dateStr, data, onBack, onConfirm }) {
 }
 
 /** Vista: diario de comidas */
-function MealLogView({ dateStr, data, onBack, onAdd, onRemove }) {
+function MealLogView({ dateStr, data, onBack, onAdd, onRemove, onSetNote }) {
   const [openSlot, setOpenSlot] = useState(null);
   const [slotSearch, setSlotSearch] = useState("");
+  const [noteInputs, setNoteInputs] = useState({});
 
   const dayMeals = data.meals?.[dateStr] ?? {};
+  const dayNotes = data.mealNotes?.[dateStr] ?? {};
   const introducedIds = Object.keys(data.foods);
 
   // Alimentos frecuentes basados en historial
@@ -224,6 +233,12 @@ function MealLogView({ dateStr, data, onBack, onAdd, onRemove }) {
                 <span className="meal-slot-toggle">{isOpen ? "▲" : "▼"}</span>
               </div>
 
+              {dayNotes[slot.key] && (
+                <div style={{ fontSize: 12, color: "var(--t2)", padding: "4px 12px 0" }}>
+                  💬 {dayNotes[slot.key]}
+                </div>
+              )}
+
               {slotFoods.length > 0 && (
                 <div className="meal-slot-foods">
                   {slotFoods.map((id) => {
@@ -248,9 +263,37 @@ function MealLogView({ dateStr, data, onBack, onAdd, onRemove }) {
 
               {isOpen && (
                 <div className="meal-slot-body">
+                  {/* Nota de texto libre */}
+                  <div style={{ marginBottom: 10 }}>
+                    <div className="day-section-title" style={{ marginBottom: 4 }}>Nota</div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <input
+                        className="meal-search-input"
+                        placeholder="Ej: tortita casera con espinacas..."
+                        value={noteInputs[slot.key] ?? dayNotes[slot.key] ?? ""}
+                        onChange={(e) => setNoteInputs((p) => ({ ...p, [slot.key]: e.target.value }))}
+                        style={{ flex: 1 }}
+                      />
+                      <button
+                        style={{ padding: "6px 12px", background: "var(--ac)", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 13, fontFamily: "var(--ft)", whiteSpace: "nowrap" }}
+                        onClick={() => {
+                          const val = noteInputs[slot.key] ?? "";
+                          onSetNote(dateStr, slot.key, val);
+                          setNoteInputs((p) => ({ ...p, [slot.key]: val }));
+                        }}
+                      >
+                        Guardar
+                      </button>
+                    </div>
+                    {dayNotes[slot.key] && !(slot.key in noteInputs) && (
+                      <div style={{ fontSize: 12, color: "var(--t2)", marginTop: 4 }}>
+                        💬 {dayNotes[slot.key]}
+                      </div>
+                    )}
+                  </div>
                   <input
                     className="meal-search-input"
-                    placeholder="Buscar..."
+                    placeholder="Buscar alimento..."
                     value={slotSearch}
                     onChange={(e) => setSlotSearch(e.target.value)}
                   />
@@ -332,7 +375,7 @@ function MealLogView({ dateStr, data, onBack, onAdd, onRemove }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function DayModal({ selectedDay, data, onClose, onRegisterFood, onAddMeal, onRemoveMeal }) {
+export default function DayModal({ selectedDay, data, onClose, onRegisterFood, onAddMeal, onRemoveMeal, onSetMealNote }) {
   const [view, setView] = useState("summary"); // "summary" | "register" | "meals"
 
   if (!selectedDay) return null;
@@ -349,6 +392,7 @@ export default function DayModal({ selectedDay, data, onClose, onRegisterFood, o
     .filter(Boolean);
 
   const dayMeals = data.meals?.[dateStr] ?? {};
+  const dayNotes = data.mealNotes?.[dateStr] ?? {};
 
   function handleConfirmRegister(ids, ds) {
     ids.forEach((id) => onRegisterFood(id, ds));
@@ -365,6 +409,7 @@ export default function DayModal({ selectedDay, data, onClose, onRegisterFood, o
             dateStr={dateStr}
             dayFoods={dayFoods}
             dayMeals={dayMeals}
+            dayNotes={dayNotes}
             onNewFood={() => setView("register")}
             onMealLog={() => setView("meals")}
           />
@@ -386,6 +431,7 @@ export default function DayModal({ selectedDay, data, onClose, onRegisterFood, o
             onBack={() => setView("summary")}
             onAdd={onAddMeal}
             onRemove={onRemoveMeal}
+            onSetNote={onSetMealNote}
           />
         )}
       </div>

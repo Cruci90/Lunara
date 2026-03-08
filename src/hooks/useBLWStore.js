@@ -14,6 +14,7 @@ export function emptyBaby(id, name = "", birthDate = "") {
     foods: {},        // { [foodId]: { date, preparation, quantity, acceptance } }
     reactions: {},    // { [foodId]: { text, severity, date } }
     meals: {},        // { [dateStr]: { [slot]: [foodId] } }
+    mealNotes: {},    // { [dateStr]: { [slot]: "texto libre" } }
     favorites: [],    // [recipeId]
     customFoods: [],  // [{ id, name, cat, al, at, age, em }]
     weeklyPlan: {},   // { [mondayISO]: { [dayIndex]: { [slot]: recipeId } } }
@@ -241,6 +242,21 @@ export function useBLWStore() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const setMealNote = useCallback((dateStr, slot, note) => {
+    mutateBaby((baby) => {
+      if (!baby.meals[dateStr]) baby.meals[dateStr] = {};
+      if (!baby.mealNotes) baby.mealNotes = {};
+      if (!baby.mealNotes[dateStr]) baby.mealNotes[dateStr] = {};
+      if (note.trim()) {
+        baby.mealNotes[dateStr][slot] = note;
+      } else {
+        delete baby.mealNotes?.[dateStr]?.[slot];
+      }
+      return baby;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const removeMeal = useCallback((dateStr, slot, foodId) => {
     mutateBaby((baby) => {
       if (!baby.meals?.[dateStr]?.[slot]) return baby;
@@ -288,7 +304,7 @@ export function useBLWStore() {
     addBaby, updateBaby, setActiveBaby, deleteBaby,
     toggleFood, registerFoodOnDate, updateFoodDetails, addCustomFood,
     saveReaction,
-    addMeal, removeMeal,
+    addMeal, removeMeal, setMealNote,
     toggleFavorite,
     setWeeklyPlanItem,
     resetStore,
