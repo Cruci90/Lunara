@@ -1,24 +1,41 @@
 import { useState } from "react";
 
-export default function SetupScreen({ onStart }) {
-  const [name, setName]         = useState("");
-  const [birthDate, setBirthDate] = useState("");
+export default function SetupScreen({ onStart, onCancel, existingBaby }) {
+  const [name, setName]         = useState(existingBaby?.name ?? "");
+  const [birthDate, setBirthDate] = useState(existingBaby?.birthDate ?? "");
   const [showNotes, setShowNotes] = useState(false);
-  const [prematuryNotes, setPrematuryNotes]         = useState("");
-  const [familyAllergyNotes, setFamilyAllergyNotes] = useState("");
-  const [pediatricNotes, setPediatricNotes]         = useState("");
+  const [prematuryNotes, setPrematuryNotes]         = useState(existingBaby?.prematuryNotes ?? "");
+  const [familyAllergyNotes, setFamilyAllergyNotes] = useState(existingBaby?.familyAllergyNotes ?? "");
+  const [pediatricNotes, setPediatricNotes]         = useState(existingBaby?.pediatricNotes ?? "");
 
   function handleStart() {
     if (!name || !birthDate) return;
     onStart(name, birthDate, { prematuryNotes, familyAllergyNotes, pediatricNotes });
   }
 
+  const isEditing = !!existingBaby;
+
   return (
     <div className="setup-screen">
       <div className="setup-card">
+        {onCancel && (
+          <button
+            onClick={onCancel}
+            style={{
+              position: "absolute", top: 16, right: 16,
+              background: "none", border: "none", fontSize: 22,
+              cursor: "pointer", color: "var(--t3)", lineHeight: 1,
+            }}
+            aria-label="Cerrar"
+          >
+            ✕
+          </button>
+        )}
         <div className="setup-icon">🥦</div>
         <h1 className="setup-title">BLW Tracker</h1>
-        <p className="setup-subtitle">Seguimiento de alimentación complementaria</p>
+        <p className="setup-subtitle">
+          {isEditing ? "Editar perfil del bebé" : "Seguimiento de alimentación complementaria"}
+        </p>
 
         <div className="setup-form">
           <label className="form-label">Nombre del bebé</label>
@@ -86,7 +103,7 @@ export default function SetupScreen({ onStart }) {
             disabled={!name || !birthDate}
             onClick={handleStart}
           >
-            Comenzar
+            {isEditing ? "Guardar cambios" : "Comenzar"}
           </button>
         </div>
       </div>

@@ -81,6 +81,7 @@ body {
 .setup-card {
   width: 100%;
   max-width: 360px;
+  position: relative;
   animation: slideUp .8s ease-out;
 }
 .setup-icon {

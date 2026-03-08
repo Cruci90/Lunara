@@ -1,7 +1,10 @@
 import { FOODS, ALLERGENS } from "../data/foods.js";
 import { daysSince } from "../utils.js";
 
-export default function Header({ data, ageMonths, babyCount, onBabySelect, onSettingsClick, onExportPDF }) {
+const SYNC_ICONS = { idle: null, syncing: "🔄", ok: "☁️", error: "⚠️", offline: "📵" };
+const SYNC_TITLES = { idle: "", syncing: "Sincronizando...", ok: "Sincronizado en la nube", error: "Error al sincronizar", offline: "Sin conexión — datos guardados localmente" };
+
+export default function Header({ data, ageMonths, babyCount, onBabySelect, onSettingsClick, onExportPDF, user, syncStatus, onAuthClick, shareCode }) {
   const introducedIds = Object.keys(data.foods);
   const totalFoods    = FOODS.length + (data.customFoods?.length ?? 0);
   const progressPct   = Math.round((introducedIds.length / totalFoods) * 100);
@@ -28,7 +31,27 @@ export default function Header({ data, ageMonths, babyCount, onBabySelect, onSet
           </div>
           <div className="header-name">{data.name}, {ageMonths}m</div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {/* Indicador de sync + auth */}
+          {user ? (
+            <button
+              className="settings-btn"
+              title={`${user.name} (${user.role})${shareCode ? ` · Código: ${shareCode}` : ""}`}
+              onClick={onAuthClick}
+              style={{ fontSize: 16 }}
+            >
+              {SYNC_ICONS[syncStatus] ?? "👤"}
+            </button>
+          ) : (
+            <button
+              className="settings-btn"
+              title="Iniciar sesión para sincronizar"
+              onClick={onAuthClick}
+              style={{ fontSize: 13, fontFamily: "var(--ft)", fontWeight: 600, color: "var(--bl)", padding: "0 8px", minWidth: 40 }}
+            >
+              Sync
+            </button>
+          )}
           <button className="settings-btn" title="Exportar PDF" aria-label="Exportar PDF" onClick={onExportPDF}>📄</button>
           <button className="settings-btn" title="Configuración" aria-label="Configuración y ajustes" onClick={onSettingsClick}>⚙️</button>
         </div>

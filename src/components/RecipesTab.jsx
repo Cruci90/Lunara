@@ -7,10 +7,17 @@ const TEXTURE_LABELS = { blando: "🥣 Blando", aplastable: "🥄 Aplastable", f
 const DIFF_LABELS    = { rapida: "⚡ Rápida", elaborada: "👨‍🍳 Elaborada", batch: "📦 Batch cooking" };
 const NUT_COLORS     = { alto: "#34C759", medio: "#FF9F0A", bajo: "#AEAEB2" };
 
+const NON_VEGETARIAN_IDS = new Set([
+  "pollo", "pavo", "ternera", "cerdo",
+  "merluza", "salmon", "bacalao", "lubina", "dorada", "atun",
+  "gambas", "mejillones",
+]);
+
 export default function RecipesTab({ data, ageMonths, babyName, onToggleFavorite }) {
   const [availFilter, setAvailFilter] = useState("disponibles");
   const [mealFilter,  setMealFilter]  = useState("todas");
   const [textFilter,  setTextFilter]  = useState("todas");
+  const [vegOnly,     setVegOnly]     = useState(false);
   const [expanded,    setExpanded]    = useState({});
   const [showShop,    setShowShop]    = useState(false);
   const [aiPrompt,    setAiPrompt]    = useState("");
@@ -24,6 +31,7 @@ export default function RecipesTab({ data, ageMonths, babyName, onToggleFavorite
     if (availFilter === "favoritos"   && !favorites.includes(r.id)) return false;
     if (mealFilter !== "todas"        && !r.tags.includes(mealFilter))  return false;
     if (textFilter !== "todas"        && r.texture !== textFilter)       return false;
+    if (vegOnly && r.ingredients.some((id) => NON_VEGETARIAN_IDS.has(id))) return false;
     return true;
   });
 
@@ -51,7 +59,7 @@ export default function RecipesTab({ data, ageMonths, babyName, onToggleFavorite
       const json = await res.json();
       setAiResult(json.recipe || json.error || "No se pudo generar.");
     } catch (err) {
-      setAiResult("Error de conexión.");
+      setAiResult("Error de conexión. Asegúrate de que el servidor está en marcha (npm run dev).");
     }
     setAiLoading(false);
   }
@@ -113,6 +121,13 @@ export default function RecipesTab({ data, ageMonths, babyName, onToggleFavorite
             {t === "todas" ? "Cualquier textura" : TEXTURE_LABELS[t]}
           </button>
         ))}
+        <button
+          className={"pill-btn sm" + (vegOnly ? " active" : "")}
+          onClick={() => setVegOnly((v) => !v)}
+          style={vegOnly ? { background: "#34C759", color: "#fff", borderColor: "#34C759" } : {}}
+        >
+          🥦 Vegetariana
+        </button>
       </div>
 
       {visible.length === 0 ? (
