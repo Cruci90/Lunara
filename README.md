@@ -17,6 +17,22 @@ Abrir: `http://localhost:4173`
 - Generador de recetas por selección manual de alimentos introducidos.
 - Persistencia local en `localStorage`.
 
+## Lunara — seguimiento de sueño (estilo Napper)
+App web independiente en `napper/` para el seguimiento del sueño del bebé:
+- Predicción de siestas según ventanas de vigilia por edad.
+- Cronómetro de sueño (dormir/despertar) y plan del día.
+- Registro manual editable de siestas y noches.
+- Estadísticas de los últimos 7 días con gráfica.
+- Sonidos para dormir (ruido blanco/rosa/marrón y latidos) generados con Web Audio.
+- Persistencia local en `localStorage`, sin dependencias ni build.
+
+Ejecutar:
+```bash
+cd napper
+python3 -m http.server 4180
+```
+Abrir: `http://localhost:4180`
+
 ## Documentación funcional
 - `docs/plan-mvp-blw.md`
 Especificación funcional para una app de seguimiento de Baby Led Weaning (BLW).
