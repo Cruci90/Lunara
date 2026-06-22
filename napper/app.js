@@ -720,10 +720,17 @@
     }
   }
 
+  // ---------- PWA: service worker ----------
+  function registerServiceWorker() {
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.register("./sw.js").catch(() => {});
+  }
+
   // ---------- Init ----------
   function init() {
     buildSky();
     bindEvents();
+    registerServiceWorker();
     if (state.baby) {
       $("#main").classList.remove("hidden");
       renderAll();
