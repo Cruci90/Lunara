@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1026" />
+  <title>Lunara — Sueño del bebé</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="sky" aria-hidden="true">
+    <div class="moon"></div>
+  </div>
+
+  <div id="app">
+    <!-- Onboarding -->
+    <section id="onboarding" class="screen hidden">
+      <div class="onb-card">
+        <div class="onb-moon">🌙</div>
+        <h1>Lunara</h1>
+        <p class="muted">Predicción de siestas y seguimiento del sueño de tu bebé.</p>
+        <form id="onb-form">
+          <label>Nombre del bebé
+            <input type="text" id="onb-name" placeholder="Ej.: Vega" required maxlength="30" />
+          </label>
+          <label>Fecha de nacimiento
+            <input type="date" id="onb-birth" required />
+          </label>
+          <label>Hora habitual de despertar
+            <input type="time" id="onb-wake" value="07:30" required />
+          </label>
+          <button type="submit" class="btn-primary">Empezar ✨</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Main app -->
+    <main id="main" class="hidden">
+      <header id="topbar">
+        <div>
+          <h2 id="baby-name"></h2>
+          <span id="baby-age" class="muted"></span>
+        </div>
+        <div id="clock"></div>
+      </header>
+
+      <!-- HOY -->
+      <section id="view-today" class="view">
+        <div id="sleep-card" class="card sleep-card">
+          <div id="status-label" class="status-label"></div>
+          <div id="big-timer" class="big-timer">—</div>
+          <div id="prediction" class="prediction"></div>
+          <button id="sleep-toggle" class="btn-sleep"></button>
+        </div>
+
+        <h3 class="section-title">Plan de hoy</h3>
+        <div id="schedule" class="card schedule"></div>
+
+        <h3 class="section-title">Sueño de hoy</h3>
+        <div class="card today-summary" id="today-summary"></div>
+      </section>
+
+      <!-- REGISTRO -->
+      <section id="view-log" class="view hidden">
+        <div class="row-between">
+          <h3 class="section-title">Registro de sueño</h3>
+          <button id="add-session" class="btn-ghost">+ Añadir</button>
+        </div>
+        <div id="log-list"></div>
+      </section>
+
+      <!-- ESTADÍSTICAS -->
+      <section id="view-stats" class="view hidden">
+        <h3 class="section-title">Últimos 7 días</h3>
+        <div class="card">
+          <div id="chart" class="chart"></div>
+          <div class="chart-legend">
+            <span><i class="dot dot-night"></i> Noche</span>
+            <span><i class="dot dot-nap"></i> Siestas</span>
+          </div>
+        </div>
+        <div id="stats-cards" class="stats-grid"></div>
+      </section>
+
+      <!-- SONIDOS -->
+      <section id="view-sounds" class="view hidden">
+        <h3 class="section-title">Sonidos para dormir</h3>
+        <div class="card sounds">
+          <div class="sound-buttons">
+            <button class="sound-btn" data-sound="white">🌫️<span>Ruido blanco</span></button>
+            <button class="sound-btn" data-sound="pink">🌸<span>Ruido rosa</span></button>
+            <button class="sound-btn" data-sound="brown">🍂<span>Ruido marrón</span></button>
+            <button class="sound-btn" data-sound="heartbeat">💗<span>Latidos</span></button>
+          </div>
+          <label class="slider-row">Volumen
+            <input type="range" id="volume" min="0" max="100" value="40" />
+          </label>
+          <label class="slider-row">Apagar en
+            <select id="sound-timer">
+              <option value="0">Sin límite</option>
+              <option value="15">15 min</option>
+              <option value="30">30 min</option>
+              <option value="45">45 min</option>
+              <option value="60">60 min</option>
+            </select>
+          </label>
+          <div id="sound-status" class="muted"></div>
+        </div>
+      </section>
+
+      <!-- PERFIL -->
+      <section id="view-profile" class="view hidden">
+        <h3 class="section-title">Perfil</h3>
+        <div class="card">
+          <form id="profile-form">
+            <label>Nombre
+              <input type="text" id="prof-name" required maxlength="30" />
+            </label>
+            <label>Fecha de nacimiento
+              <input type="date" id="prof-birth" required />
+            </label>
+            <label>Hora habitual de despertar
+              <input type="time" id="prof-wake" required />
+            </label>
+            <label>Hora objetivo de acostarse
+              <input type="time" id="prof-bed" required />
+            </label>
+            <button type="submit" class="btn-primary">Guardar</button>
+          </form>
+        </div>
+        <div class="card">
+          <h4>Ventanas de sueño actuales</h4>
+          <p id="prof-windows" class="muted"></p>
+        </div>
+        <div class="card danger-zone">
+          <button id="export-data" class="btn-ghost">Exportar datos (JSON)</button>
+          <button id="reset-data" class="btn-danger">Borrar todos los datos</button>
+        </div>
+      </section>
+
+      <nav id="tabbar">
+        <button class="tab active" data-view="today">🌙<span>Hoy</span></button>
+        <button class="tab" data-view="log">📋<span>Registro</span></button>
+        <button class="tab" data-view="stats">📊<span>Datos</span></button>
+        <button class="tab" data-view="sounds">🎵<span>Sonidos</span></button>
+        <button class="tab" data-view="profile">⚙️<span>Perfil</span></button>
+      </nav>
+    </main>
+
+    <!-- Modal añadir/editar sesión -->
+    <div id="modal" class="modal hidden">
+      <div class="modal-card">
+        <h3 id="modal-title">Añadir sueño</h3>
+        <form id="session-form">
+          <label>Inicio
+            <input type="datetime-local" id="sess-start" required />
+          </label>
+          <label>Fin
+            <input type="datetime-local" id="sess-end" required />
+          </label>
+          <label>Tipo
+            <select id="sess-type">
+              <option value="nap">Siesta</option>
+              <option value="night">Noche</option>
+            </select>
+          </label>
+          <div class="modal-actions">
+            <button type="button" id="sess-delete" class="btn-danger hidden">Eliminar</button>
+            <button type="button" id="sess-cancel" class="btn-ghost">Cancelar</button>
+            <button type="submit" class="btn-primary">Guardar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
