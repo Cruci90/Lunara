@@ -196,6 +196,7 @@
         label: `Siesta ${i}`,
         at: start,
         until: end,
+        nap: true,
       });
       t = end;
     }
@@ -204,16 +205,31 @@
     items.push({ icon: "🌙", time: fmtTime(bed), label: "A dormir (noche)", at: bed });
 
     el.innerHTML = items
-      .map((it) => {
+      .map((it, idx) => {
         const past = (it.until || it.at) < now;
         const current = it.at <= now && now <= (it.until || it.at);
-        return `<div class="sched-item ${past ? "past" : ""} ${current ? "current" : ""}">
+        const clickable = it.nap;
+        return `<div class="sched-item ${past ? "past" : ""} ${current ? "current" : ""} ${clickable ? "sched-clickable" : ""}"
+          ${clickable ? `data-idx="${idx}" data-start="${it.at.toISOString()}" data-end="${it.until.toISOString()}"` : ""}>
           <div class="sched-icon">${it.icon}</div>
           <div class="sched-time">${it.time}</div>
           <div>${it.label}</div>
+          ${clickable ? `<div class="sched-edit muted">✏️</div>` : ""}
         </div>`;
       })
       .join("");
+
+    $$(".sched-clickable").forEach((item) =>
+      item.addEventListener("click", () => {
+        const predStart = new Date(item.dataset.start);
+        const predEnd = new Date(item.dataset.end);
+        const existing = sessionsOverlappingDay(predStart)
+          .map(([s]) => s)
+          .find((s) => s.type === "nap" && new Date(s.start) < predEnd && new Date(s.end) > predStart);
+        if (existing) openModal(existing.id);
+        else openModal(null, { start: predStart, end: predEnd, type: "nap" });
+      })
+    );
   }
 
   // ---------- Render: resumen de hoy ----------
@@ -455,7 +471,7 @@
   // ---------- Modal de sesión ----------
   let editingId = null;
 
-  function openModal(id = null) {
+  function openModal(id = null, prefill = null) {
     editingId = id;
     const form = $("#session-form");
     form.reset();
@@ -466,6 +482,10 @@
       $("#sess-start").value = toLocalInput(new Date(s.start));
       $("#sess-end").value = toLocalInput(new Date(s.end));
       $("#sess-type").value = s.type;
+    } else if (prefill) {
+      $("#sess-start").value = toLocalInput(prefill.start);
+      $("#sess-end").value = toLocalInput(prefill.end);
+      $("#sess-type").value = prefill.type;
     } else {
       const now = new Date();
       const ago = new Date(now.getTime() - 60 * 60000);
