@@ -74,9 +74,81 @@
     return `${months} mes${months === 1 ? "" : "es"}`;
   }
 
-  function windowsForAge() {
+  function ageWindow() {
     const w = ageWeeks();
     return WAKE_WINDOWS.find((r) => w < r.maxWeeks) || WAKE_WINDOWS[WAKE_WINDOWS.length - 1];
+  }
+
+  // ---------- Predicción personalizada a partir del historial ----------
+  const HISTORY_DAYS = 21;
+  const MIN_GAP_SAMPLES = 4;
+  const MIN_NAP_SAMPLES = 3;
+  const MIN_DAY_SAMPLES = 3;
+
+  function percentile(values, p) {
+    const sorted = [...values].sort((a, b) => a - b);
+    const idx = (sorted.length - 1) * p;
+    const lo = Math.floor(idx), hi = Math.ceil(idx);
+    return lo === hi ? sorted[lo] : sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+  }
+  const median = (values) => percentile(values, 0.5);
+
+  function recentSessions(days) {
+    const cutoff = Date.now() - days * 24 * 3600e3;
+    return [...state.sessions]
+      .filter((s) => new Date(s.start).getTime() >= cutoff)
+      .sort((a, b) => new Date(a.start) - new Date(b.start));
+  }
+
+  // Ventana de vigilia real: tiempo entre el fin de una siesta/noche y el inicio
+  // de la siguiente sesión, solo cuando ambas caen en el mismo día.
+  function personalizedWakeWindow() {
+    const sessions = recentSessions(HISTORY_DAYS);
+    const gaps = [];
+    for (let i = 1; i < sessions.length; i++) {
+      const prevEnd = new Date(sessions[i - 1].end);
+      const currStart = new Date(sessions[i].start);
+      if (dayKey(prevEnd) !== dayKey(currStart)) continue;
+      const gap = (currStart - prevEnd) / 60000;
+      if (gap >= 15 && gap <= 400) gaps.push(gap);
+    }
+    if (gaps.length < MIN_GAP_SAMPLES) return null;
+    return { min: Math.round(percentile(gaps, 0.25)), max: Math.round(percentile(gaps, 0.75)) };
+  }
+
+  function personalizedNapAvg() {
+    const durations = recentSessions(HISTORY_DAYS)
+      .filter((s) => s.type === "nap")
+      .map((s) => (new Date(s.end) - new Date(s.start)) / 60000)
+      .filter((m) => m >= 10 && m <= 240);
+    if (durations.length < MIN_NAP_SAMPLES) return null;
+    return Math.round(median(durations));
+  }
+
+  function personalizedNapsCount() {
+    const byDay = new Map();
+    for (const s of recentSessions(14)) {
+      const k = dayKey(new Date(s.start));
+      byDay.set(k, (byDay.get(k) || 0) + (s.type === "nap" ? 1 : 0));
+    }
+    const counts = Array.from(byDay.values());
+    if (counts.length < MIN_DAY_SAMPLES) return null;
+    return Math.max(1, Math.round(median(counts)));
+  }
+
+  function windowsForAge() {
+    const base = ageWindow();
+    const win = personalizedWakeWindow();
+    const napAvg = personalizedNapAvg();
+    const naps = personalizedNapsCount();
+    return {
+      ...base,
+      min: win ? win.min : base.min,
+      max: win ? win.max : base.max,
+      napAvg: napAvg || base.napAvg,
+      naps: naps || base.naps,
+      personalized: Boolean(win || napAvg || naps),
+    };
   }
 
   function timeAt(dateBase, hhmm) {
@@ -167,12 +239,13 @@
       const win = windowsForAge();
       const from = new Date(wake.getTime() + win.min * 60000);
       const to = new Date(wake.getTime() + win.max * 60000);
+      const tag = win.personalized ? " · según su historial" : " · estimación por edad";
       if (now < from) {
-        pred.textContent = `😴 Ventana de sueño: ${fmtTime(from)} – ${fmtTime(to)}`;
+        pred.textContent = `😴 Ventana de sueño: ${fmtTime(from)} – ${fmtTime(to)}${tag}`;
       } else if (now <= to) {
-        pred.textContent = `✨ ¡Es buen momento para dormir! (hasta ${fmtTime(to)})`;
+        pred.textContent = `✨ ¡Es buen momento para dormir! (hasta ${fmtTime(to)})${tag}`;
       } else {
-        pred.textContent = `⚠️ Ventana superada (${fmtTime(from)} – ${fmtTime(to)}): puede estar muy cansado/a`;
+        pred.textContent = `⚠️ Ventana superada (${fmtTime(from)} – ${fmtTime(to)}): puede estar muy cansado/a${tag}`;
       }
     }
   }
@@ -358,9 +431,12 @@
     $("#prof-wake").value = state.baby.wakeTime;
     $("#prof-bed").value = state.baby.bedTime || "20:00";
     const w = windowsForAge();
+    const source = w.personalized
+      ? "calculado a partir de tu historial de los últimos días"
+      : `estimación orientativa para ${w.label}`;
     $("#prof-windows").textContent =
-      `Edad ${ageLabel()} (${w.label}): ventana de vigilia ${fmtDur(w.min)} – ${fmtDur(w.max)}, ` +
-      `${w.naps} siesta${w.naps === 1 ? "" : "s"} al día aprox.`;
+      `Ventana de vigilia ${fmtDur(w.min)} – ${fmtDur(w.max)}, ` +
+      `${w.naps} siesta${w.naps === 1 ? "" : "s"} al día aprox. (${source}, edad: ${ageLabel()})`;
   }
 
   // ---------- Sonidos (Web Audio) ----------
