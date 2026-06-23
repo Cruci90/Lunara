@@ -261,6 +261,47 @@ test.describe("Multi-perfil (varios bebés)", () => {
   });
 });
 
+test.describe("Tema claro/oscuro y accesibilidad", () => {
+  test("alternar tema cambia el atributo data-theme y persiste tras recargar", async ({ page }) => {
+    await onboard(page);
+    await page.click('.tab[data-view="profile"]');
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await page.click("#theme-toggle");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await expect(page.locator("#theme-toggle")).toHaveAttribute("aria-pressed", "true");
+    await page.reload();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  });
+
+  test("las pestañas exponen aria-selected correctamente", async ({ page }) => {
+    await onboard(page);
+    await expect(page.locator("#tab-today")).toHaveAttribute("aria-selected", "true");
+    await page.click('.tab[data-view="log"]');
+    await expect(page.locator("#tab-today")).toHaveAttribute("aria-selected", "false");
+    await expect(page.locator("#tab-log")).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("el modal se cierra con Escape y devuelve el foco", async ({ page }) => {
+    await onboard(page);
+    await page.click('.tab[data-view="log"]');
+    await page.click("#add-session");
+    await expect(page.locator("#modal")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#modal")).toBeHidden();
+  });
+
+  test("los botones de sonido reflejan aria-pressed", async ({ page }) => {
+    await onboard(page);
+    await page.click('.tab[data-view="sounds"]');
+    const btn = page.locator('.sound-btn[data-sound="white"]');
+    await expect(btn).toHaveAttribute("aria-pressed", "false");
+    await btn.click();
+    await expect(btn).toHaveAttribute("aria-pressed", "true");
+    await btn.click();
+    await expect(btn).toHaveAttribute("aria-pressed", "false");
+  });
+});
+
 test.describe("PWA", () => {
   test("registra el manifest y el service worker, y cachea los assets", async ({ page }) => {
     await page.goto("/index.html");

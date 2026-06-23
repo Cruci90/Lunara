@@ -54,11 +54,11 @@
       </header>
 
       <!-- HOY -->
-      <section id="view-today" class="view">
+      <section id="view-today" class="view" role="tabpanel" aria-labelledby="tab-today">
         <div id="sleep-card" class="card sleep-card">
-          <div id="status-label" class="status-label"></div>
+          <div id="status-label" class="status-label" aria-live="polite"></div>
           <div id="big-timer" class="big-timer">—</div>
-          <div id="prediction" class="prediction"></div>
+          <div id="prediction" class="prediction" aria-live="polite"></div>
           <button id="sleep-toggle" class="btn-sleep"></button>
         </div>
 
@@ -70,7 +70,7 @@
       </section>
 
       <!-- REGISTRO -->
-      <section id="view-log" class="view hidden">
+      <section id="view-log" class="view hidden" role="tabpanel" aria-labelledby="tab-log">
         <div class="row-between">
           <h3 class="section-title">Registro de sueño</h3>
           <button id="add-session" class="btn-ghost">+ Añadir</button>
@@ -79,7 +79,7 @@
       </section>
 
       <!-- ESTADÍSTICAS -->
-      <section id="view-stats" class="view hidden">
+      <section id="view-stats" class="view hidden" role="tabpanel" aria-labelledby="tab-stats">
         <h3 class="section-title">Últimos 7 días</h3>
         <div class="card">
           <div id="chart" class="chart"></div>
@@ -92,14 +92,14 @@
       </section>
 
       <!-- SONIDOS -->
-      <section id="view-sounds" class="view hidden">
+      <section id="view-sounds" class="view hidden" role="tabpanel" aria-labelledby="tab-sounds">
         <h3 class="section-title">Sonidos para dormir</h3>
         <div class="card sounds">
           <div class="sound-buttons">
-            <button class="sound-btn" data-sound="white">🌫️<span>Ruido blanco</span></button>
-            <button class="sound-btn" data-sound="pink">🌸<span>Ruido rosa</span></button>
-            <button class="sound-btn" data-sound="brown">🍂<span>Ruido marrón</span></button>
-            <button class="sound-btn" data-sound="heartbeat">💗<span>Latidos</span></button>
+            <button class="sound-btn" data-sound="white" aria-pressed="false">☁️<span>Ruido blanco</span></button>
+            <button class="sound-btn" data-sound="pink" aria-pressed="false">🌸<span>Ruido rosa</span></button>
+            <button class="sound-btn" data-sound="brown" aria-pressed="false">🍂<span>Ruido marrón</span></button>
+            <button class="sound-btn" data-sound="heartbeat" aria-pressed="false">💗<span>Latidos</span></button>
           </div>
           <label class="slider-row">Volumen
             <input type="range" id="volume" min="0" max="100" value="40" />
@@ -118,8 +118,12 @@
       </section>
 
       <!-- PERFIL -->
-      <section id="view-profile" class="view hidden">
+      <section id="view-profile" class="view hidden" role="tabpanel" aria-labelledby="tab-profile">
         <h3 class="section-title">Perfil</h3>
+        <div class="card">
+          <h4>Apariencia</h4>
+          <button id="theme-toggle" class="btn-ghost" type="button" aria-pressed="false">🌙 Modo oscuro</button>
+        </div>
         <div class="card">
           <h4>Bebés en este dispositivo</h4>
           <div id="baby-list"></div>
@@ -168,18 +172,18 @@
         </div>
       </section>
 
-      <nav id="tabbar">
-        <button class="tab active" data-view="today">🌙<span>Hoy</span></button>
-        <button class="tab" data-view="log">📋<span>Registro</span></button>
-        <button class="tab" data-view="stats">📊<span>Datos</span></button>
-        <button class="tab" data-view="sounds">🎵<span>Sonidos</span></button>
-        <button class="tab" data-view="profile">⚙️<span>Perfil</span></button>
+      <nav id="tabbar" role="tablist" aria-label="Secciones de Lunara">
+        <button id="tab-today" class="tab active" data-view="today" role="tab" aria-selected="true" aria-controls="view-today">🌙<span>Hoy</span></button>
+        <button id="tab-log" class="tab" data-view="log" role="tab" aria-selected="false" aria-controls="view-log">📋<span>Registro</span></button>
+        <button id="tab-stats" class="tab" data-view="stats" role="tab" aria-selected="false" aria-controls="view-stats">📊<span>Datos</span></button>
+        <button id="tab-sounds" class="tab" data-view="sounds" role="tab" aria-selected="false" aria-controls="view-sounds">🎵<span>Sonidos</span></button>
+        <button id="tab-profile" class="tab" data-view="profile" role="tab" aria-selected="false" aria-controls="view-profile">⚙️<span>Perfil</span></button>
       </nav>
     </main>
 
     <!-- Modal añadir/editar sesión -->
     <div id="modal" class="modal hidden">
-      <div class="modal-card">
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
         <h3 id="modal-title">Añadir sueño</h3>
         <form id="session-form">
           <label>Inicio

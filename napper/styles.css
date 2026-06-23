@@ -11,6 +11,28 @@
   --nap: #ffd98a;
   --danger: #ff7b8a;
   --radius: 18px;
+  --modal-bg: #161d3f;
+  --tabbar-bg: rgba(11, 16, 38, 0.9);
+  --input-bg: rgba(255, 255, 255, 0.06);
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --modal-bg: #ffffff;
+  --tabbar-bg: rgba(255, 255, 255, 0.85);
+  --input-bg: rgba(20, 30, 70, 0.05);
+  color-scheme: light;
+  --bg-top: #eef2ff;
+  --bg-bottom: #dfe6ff;
+  --card: rgba(255, 255, 255, 0.75);
+  --card-border: rgba(20, 30, 70, 0.12);
+  --text: #1c2240;
+  --muted: #5b6285;
+  --accent: #d98c2b;
+  --accent-2: #3868c9;
+  --night: #5566c4;
+  --nap: #d98c2b;
+  --danger: #c23b4d;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -20,10 +42,19 @@ html, body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   color: var(--text);
   background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%) fixed;
+  transition: background-color 0.2s, color 0.2s;
 }
+.card, .modal-card, .onb-card, .log-item, #tabbar { transition: background-color 0.2s, border-color 0.2s; }
 
 .hidden { display: none !important; }
 .muted { color: var(--muted); font-size: 0.9rem; }
+
+:root[data-theme="light"] #sky { display: none; }
+
+:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 2px;
+}
 
 /* ---------- Cielo estrellado ---------- */
 #sky {
@@ -126,10 +157,9 @@ input, select {
   padding: 11px 12px;
   border-radius: 12px;
   border: 1px solid var(--card-border);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--input-bg);
   color: var(--text);
   font-size: 1rem;
-  color-scheme: dark;
 }
 input:focus, select:focus { outline: 2px solid var(--accent-2); }
 
@@ -319,7 +349,7 @@ input:focus, select:focus { outline: 2px solid var(--accent-2); }
   max-width: 520px;
   margin: 0 auto;
   padding: 8px 6px calc(8px + env(safe-area-inset-bottom));
-  background: rgba(11, 16, 38, 0.9);
+  background: var(--tabbar-bg);
   border-top: 1px solid var(--card-border);
   backdrop-filter: blur(10px);
 }
@@ -352,7 +382,7 @@ input:focus, select:focus { outline: 2px solid var(--accent-2); }
 .modal-card {
   width: 100%;
   max-width: 380px;
-  background: #161d3f;
+  background: var(--modal-bg);
   border: 1px solid var(--card-border);
   border-radius: 20px;
   padding: 22px;

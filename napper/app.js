@@ -5,6 +5,29 @@
   "use strict";
 
   const STORAGE_KEY = "lunara_state_v1";
+  const THEME_KEY = "lunara_theme";
+
+  // ---------- Tema claro/oscuro ----------
+  function applyTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    const btn = $("#theme-toggle");
+    if (btn) {
+      btn.textContent = theme === "light" ? "☀️ Modo claro" : "🌙 Modo oscuro";
+      btn.setAttribute("aria-pressed", String(theme === "light"));
+    }
+    const metaTheme = document.querySelector('meta[name="theme-color"]');
+    if (metaTheme) metaTheme.setAttribute("content", theme === "light" ? "#eef2ff" : "#0b1026");
+  }
+
+  function loadTheme() {
+    return localStorage.getItem(THEME_KEY) || "dark";
+  }
+
+  function toggleTheme() {
+    const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+    localStorage.setItem(THEME_KEY, next);
+    applyTheme(next);
+  }
 
   // ---------- Ventanas de sueño orientativas por edad (semanas) ----------
   // min/max: ventana de vigilia en minutos; naps: nº de siestas típico;
@@ -594,8 +617,11 @@
   }
 
   function renderSoundUI() {
-    $$(".sound-btn").forEach((b) =>
-      b.classList.toggle("active", b.dataset.sound === sound.current));
+    $$(".sound-btn").forEach((b) => {
+      const active = b.dataset.sound === sound.current;
+      b.classList.toggle("active", active);
+      b.setAttribute("aria-pressed", String(active));
+    });
     const st = $("#sound-status");
     if (!sound.current) st.textContent = "Sin sonido";
     else if (sound.offAt) st.textContent = `Reproduciendo · se apaga a las ${fmtTime(new Date(sound.offAt))}`;
@@ -604,9 +630,11 @@
 
   // ---------- Modal de sesión ----------
   let editingId = null;
+  let modalTrigger = null;
 
   function openModal(id = null, prefill = null) {
     editingId = id;
+    modalTrigger = document.activeElement;
     const form = $("#session-form");
     form.reset();
     $("#sess-delete").classList.toggle("hidden", !id);
@@ -628,18 +656,24 @@
       $("#sess-type").value = suggestType(ago);
     }
     $("#modal").classList.remove("hidden");
+    $("#sess-start").focus();
   }
 
   function closeModal() {
     $("#modal").classList.add("hidden");
     editingId = null;
+    if (modalTrigger) { modalTrigger.focus(); modalTrigger = null; }
   }
 
   // ---------- Vistas ----------
   function showView(name) {
     $$(".view").forEach((v) => v.classList.add("hidden"));
     $(`#view-${name}`).classList.remove("hidden");
-    $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === name));
+    $$(".tab").forEach((t) => {
+      const active = t.dataset.view === name;
+      t.classList.toggle("active", active);
+      t.setAttribute("aria-selected", String(active));
+    });
     renderAll();
   }
 
@@ -656,6 +690,14 @@
 
   // ---------- Eventos ----------
   function bindEvents() {
+    // Tema claro/oscuro
+    $("#theme-toggle").addEventListener("click", toggleTheme);
+
+    // Cerrar el modal con Escape
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !$("#modal").classList.contains("hidden")) closeModal();
+    });
+
     // Onboarding
     $("#onb-form").addEventListener("submit", (e) => {
       e.preventDefault();
@@ -816,6 +858,7 @@
 
   // ---------- Init ----------
   function init() {
+    applyTheme(loadTheme());
     buildSky();
     bindEvents();
     registerServiceWorker();
