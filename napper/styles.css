@@ -221,6 +221,21 @@ input:focus, select:focus { outline: 2px solid var(--accent-2); }
   box-shadow: 0 0 36px rgba(108, 123, 217, 0.45);
 }
 
+/* ---------- Reloj de 24 horas ---------- */
+.clock-card { display: flex; justify-content: center; padding: 14px; }
+.clock-svg { width: 100%; max-width: 260px; height: auto; }
+.clock-face { fill: rgba(255, 255, 255, 0.03); stroke: var(--card-border); }
+.clock-tick { stroke: var(--muted); stroke-width: 1; }
+.clock-label { fill: var(--muted); font-size: 11px; }
+.clock-pred { fill: var(--accent); opacity: 0.22; }
+.clock-nap { fill: var(--nap); }
+.clock-night { fill: var(--night); }
+.clock-active { opacity: 0.85; animation: clock-pulse 1.6s ease-in-out infinite alternate; }
+@keyframes clock-pulse { from { opacity: 0.6; } to { opacity: 1; } }
+.clock-now { stroke: var(--accent-2); stroke-width: 2; }
+.clock-legend { display: flex; gap: 16px; justify-content: center; margin: -4px 0 4px; font-size: 0.8rem; color: var(--muted); }
+.dot-pred { background: var(--accent); opacity: 0.45; }
+
 /* ---------- Plan del día ---------- */
 .schedule { padding: 8px 16px; }
 .sched-item {

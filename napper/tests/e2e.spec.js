@@ -94,6 +94,33 @@ test.describe("Registro de sueño (CRUD)", () => {
   });
 });
 
+test.describe("Reloj de 24 horas", () => {
+  test("dibuja el SVG con ticks, predicción y sueño registrado", async ({ page }) => {
+    await onboard(page, { monthsAgo: 4 });
+    await expect(page.locator(".clock-svg")).toBeVisible();
+    await expect(page.locator(".clock-tick")).toHaveCount(8); // cada 3h en 24h
+    await expect(page.locator(".clock-pred")).toHaveCount(3); // 3 siestas previstas a esta edad
+    await expect(page.locator(".clock-now")).toHaveCount(1);
+
+    await page.click('.tab[data-view="log"]');
+    await page.click("#add-session");
+    await page.selectOption("#sess-type", "nap");
+    await page.click("#session-form button[type=submit]");
+    await page.click('.tab[data-view="today"]');
+    await expect(page.locator(".clock-nap")).toHaveCount(1);
+  });
+
+  test("no lanza errores de consola al iniciar y detener el sueño", async ({ page }) => {
+    const errors = [];
+    page.on("pageerror", (e) => errors.push(e.message));
+    await onboard(page);
+    await page.click("#sleep-toggle");
+    await page.waitForTimeout(150);
+    await page.click("#sleep-toggle");
+    expect(errors).toEqual([]);
+  });
+});
+
 test.describe("Editar siestas desde el plan de hoy", () => {
   test("una siesta olvidada se puede confirmar y luego editar", async ({ page }) => {
     await onboard(page, { monthsAgo: 4 });

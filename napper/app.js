@@ -294,11 +294,9 @@
     }
   }
 
-  // ---------- Render: plan del día ----------
-  function renderSchedule() {
-    const el = $("#schedule");
+  // ---------- Plan del día (predicción) ----------
+  function buildScheduleItems() {
     const win = windowsForAge();
-    const now = new Date();
     const items = [];
 
     let t = timeAt(new Date(), currentBaby().wakeTime);
@@ -320,6 +318,14 @@
 
     const bed = timeAt(new Date(), currentBaby().bedTime || "20:00");
     items.push({ icon: "🌙", time: fmtTime(bed), label: "A dormir (noche)", at: bed });
+    return items;
+  }
+
+  // ---------- Render: plan del día (lista) ----------
+  function renderSchedule() {
+    const el = $("#schedule");
+    const now = new Date();
+    const items = buildScheduleItems();
 
     el.innerHTML = items
       .map((it, idx) => {
@@ -347,6 +353,89 @@
         else openModal(null, { start: predStart, end: predEnd, type: "nap" });
       })
     );
+  }
+
+  // ---------- Reloj circular de 24 horas ----------
+  function polarToCartesian(cx, cy, r, angleDeg) {
+    const rad = ((angleDeg - 90) * Math.PI) / 180;
+    return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+  }
+
+  function donutSlicePath(cx, cy, innerR, outerR, startAngle, endAngle) {
+    const largeArc = endAngle - startAngle <= 180 ? 0 : 1;
+    const p1 = polarToCartesian(cx, cy, outerR, startAngle);
+    const p2 = polarToCartesian(cx, cy, outerR, endAngle);
+    const p3 = polarToCartesian(cx, cy, innerR, endAngle);
+    const p4 = polarToCartesian(cx, cy, innerR, startAngle);
+    return `M ${p1.x} ${p1.y} A ${outerR} ${outerR} 0 ${largeArc} 1 ${p2.x} ${p2.y} L ${p3.x} ${p3.y} A ${innerR} ${innerR} 0 ${largeArc} 0 ${p4.x} ${p4.y} Z`;
+  }
+
+  const minutesSinceMidnight = (d, dayStart) => (d - dayStart) / 60000;
+  const angleForMinutes = (mins) => (mins / 1440) * 360;
+
+  function todaySleepSegments() {
+    const day = new Date(); day.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(day); dayEnd.setDate(dayEnd.getDate() + 1);
+    const baby = currentBaby();
+    const segments = [];
+    for (const s of baby.sessions) {
+      const a = new Date(s.start), b = new Date(s.end);
+      const from = a < day ? day : a;
+      const to = b > dayEnd ? dayEnd : b;
+      if (to > from) segments.push({ start: from, end: to, type: s.type });
+    }
+    if (baby.activeSleep) {
+      const a = new Date(baby.activeSleep.start);
+      const from = a < day ? day : a;
+      const to = new Date();
+      if (to > from) segments.push({ start: from, end: to, type: suggestType(a), active: true });
+    }
+    return segments;
+  }
+
+  function renderClock() {
+    const el = $("#clock-wheel");
+    if (!el) return;
+    const day = new Date(); day.setHours(0, 0, 0, 0);
+    const size = 220, cx = size / 2, cy = size / 2;
+    const outerR = 98, predInnerR = 80;
+    const actOuterR = 76, actInnerR = 54;
+    const parts = [];
+
+    parts.push(`<circle cx="${cx}" cy="${cy}" r="${outerR}" class="clock-face" />`);
+    for (let h = 0; h < 24; h += 3) {
+      const angle = angleForMinutes(h * 60);
+      const p1 = polarToCartesian(cx, cy, outerR + 2, angle);
+      const p2 = polarToCartesian(cx, cy, outerR + 8, angle);
+      parts.push(`<line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" class="clock-tick" />`);
+      if (h % 6 === 0) {
+        const lp = polarToCartesian(cx, cy, outerR + 18, angle);
+        parts.push(`<text x="${lp.x}" y="${lp.y}" class="clock-label" text-anchor="middle" dominant-baseline="middle">${pad(h)}</text>`);
+      }
+    }
+
+    const addSegment = (innerR, outerRing, startMin, endMin, cls) => {
+      const from = Math.max(0, startMin), to = Math.min(1440, endMin);
+      if (to <= from) return;
+      parts.push(`<path d="${donutSlicePath(cx, cy, innerR, outerRing, angleForMinutes(from), angleForMinutes(to))}" class="${cls}" />`);
+    };
+
+    for (const it of buildScheduleItems()) {
+      if (!it.nap) continue;
+      addSegment(predInnerR, outerR, minutesSinceMidnight(it.at, day), minutesSinceMidnight(it.until, day), "clock-pred");
+    }
+
+    for (const seg of todaySleepSegments()) {
+      const cls = (seg.type === "night" ? "clock-night" : "clock-nap") + (seg.active ? " clock-active" : "");
+      addSegment(actInnerR, actOuterR, minutesSinceMidnight(seg.start, day), minutesSinceMidnight(seg.end, day), cls);
+    }
+
+    const nowAngle = angleForMinutes(minutesSinceMidnight(new Date(), day));
+    const np1 = polarToCartesian(cx, cy, actInnerR - 8, nowAngle);
+    const np2 = polarToCartesian(cx, cy, outerR + 8, nowAngle);
+    parts.push(`<line x1="${np1.x}" y1="${np1.y}" x2="${np2.x}" y2="${np2.y}" class="clock-now" />`);
+
+    el.innerHTML = `<svg viewBox="0 0 ${size} ${size}" class="clock-svg" role="img" aria-label="Reloj de 24 horas con el plan previsto y el sueño registrado de hoy">${parts.join("")}</svg>`;
   }
 
   // ---------- Render: resumen de hoy ----------
@@ -681,6 +770,7 @@
     if (!currentBaby()) return;
     renderHeader();
     renderSleepCard();
+    renderClock();
     renderSchedule();
     renderTodaySummary();
     renderLog();
@@ -873,7 +963,11 @@
     }
     tick();
     setInterval(tick, 1000);
-    setInterval(() => currentBaby() && renderSchedule(), 60000);
+    setInterval(() => {
+      if (!currentBaby()) return;
+      renderSchedule();
+      renderClock();
+    }, 60000);
   }
 
   init();
