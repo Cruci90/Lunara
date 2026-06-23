@@ -178,12 +178,86 @@ test.describe("Predicción inteligente", () => {
         bedEnd.setHours(7, 0, 0, 0);
         sessions.push({ id: "night-" + d, start: bedStart.toISOString(), end: bedEnd.toISOString(), type: "night" });
       }
-      state.sessions = sessions;
+      const baby = state.babies.find((b) => b.id === state.activeBabyId);
+      baby.sessions = sessions;
       localStorage.setItem("lunara_state_v1", JSON.stringify(state));
     });
     await page.reload();
     await page.click('.tab[data-view="profile"]');
     await expect(page.locator("#prof-windows")).toContainText("calculado a partir de tu historial");
+  });
+});
+
+test.describe("Multi-perfil (varios bebés)", () => {
+  test("añadir un segundo bebé, cambiar entre ellos y eliminar uno", async ({ page }) => {
+    await onboard(page, { name: "Vega" });
+    await page.click('.tab[data-view="profile"]');
+
+    await page.click("#add-baby-toggle");
+    await page.fill("#newbaby-name", "Nova");
+    const d = new Date();
+    d.setMonth(d.getMonth() - 2);
+    await page.fill("#newbaby-birth", d.toISOString().slice(0, 10));
+    await page.fill("#newbaby-wake", "08:00");
+    await page.click("#add-baby-form button[type=submit]");
+
+    // Tras añadir, el nuevo bebé queda activo.
+    await expect(page.locator("#baby-name")).toHaveText("Nova");
+    await expect(page.locator(".baby-row")).toHaveCount(2);
+    await expect(page.locator(".baby-row.active .baby-row-name")).toContainText("Nova");
+
+    // Cambiar de vuelta a Vega.
+    await page.click('[data-switch]');
+    await expect(page.locator("#baby-name")).toHaveText("Vega");
+
+    // Eliminar a Nova.
+    page.once("dialog", (d) => d.accept());
+    await page.click('.tab[data-view="profile"]');
+    await page.click('.baby-row:not(.active) [data-delete]');
+    await expect(page.locator(".baby-row")).toHaveCount(1);
+    await expect(page.locator("#baby-name")).toHaveText("Vega");
+  });
+
+  test("cada bebé mantiene su propio registro de sueño", async ({ page }) => {
+    await onboard(page, { name: "Vega" });
+    await page.click('.tab[data-view="log"]');
+    await page.click("#add-session");
+    await page.click("#session-form button[type=submit]");
+    await expect(page.locator(".log-item")).toHaveCount(1);
+
+    await page.click('.tab[data-view="profile"]');
+    await page.click("#add-baby-toggle");
+    await page.fill("#newbaby-name", "Nova");
+    const d = new Date();
+    d.setMonth(d.getMonth() - 2);
+    await page.fill("#newbaby-birth", d.toISOString().slice(0, 10));
+    await page.fill("#newbaby-wake", "08:00");
+    await page.click("#add-baby-form button[type=submit]");
+
+    await page.click('.tab[data-view="log"]');
+    await expect(page.locator(".log-item")).toHaveCount(0);
+
+    await page.click('.tab[data-view="profile"]');
+    await page.click("[data-switch]");
+    await page.click('.tab[data-view="log"]');
+    await expect(page.locator(".log-item")).toHaveCount(1);
+  });
+
+  test("migra automáticamente el formato antiguo de un solo bebé", async ({ page }) => {
+    await page.goto("/index.html");
+    await page.evaluate(() => {
+      const oldState = {
+        baby: { name: "Legacy", birth: "2026-02-01", wakeTime: "07:00", bedTime: "20:00" },
+        sessions: [{ id: "s1", start: "2026-06-20T09:00:00.000Z", end: "2026-06-20T09:40:00.000Z", type: "nap" }],
+        activeSleep: null,
+      };
+      localStorage.setItem("lunara_state_v1", JSON.stringify(oldState));
+    });
+    await page.reload();
+    await expect(page.locator("#main")).toBeVisible();
+    await expect(page.locator("#baby-name")).toHaveText("Legacy");
+    await page.click('.tab[data-view="log"]');
+    await expect(page.locator(".log-item")).toHaveCount(1);
   });
 });
 

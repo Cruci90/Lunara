@@ -22,25 +22,45 @@
     { maxWeeks: 999, min: 300, max: 360, naps: 1, napAvg: 110, label: "18+ meses" },
   ];
 
-  // ---------- Estado ----------
+  // ---------- Estado (múltiples bebés por dispositivo) ----------
+  // baby: { id, name, birth, wakeTime, bedTime, sessions: [{id,start,end,type}], activeSleep: {start}|null }
   const defaultState = () => ({
-    baby: null, // { name, birth, wakeTime, bedTime }
-    sessions: [], // { id, start, end, type: 'nap'|'night' }
-    activeSleep: null, // { start } mientras duerme
+    babies: [],
+    activeBabyId: null,
   });
+
+  function newBaby({ name, birth, wakeTime, bedTime = "20:00" }) {
+    return { id: crypto.randomUUID(), name, birth, wakeTime, bedTime, sessions: [], activeSleep: null };
+  }
 
   let state = load();
 
   function load() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) return Object.assign(defaultState(), JSON.parse(raw));
+      if (!raw) return defaultState();
+      const parsed = JSON.parse(raw);
+      if (parsed.baby && !parsed.babies) {
+        // Migración desde el formato de un solo bebé.
+        const baby = {
+          id: crypto.randomUUID(),
+          ...parsed.baby,
+          sessions: parsed.sessions || [],
+          activeSleep: parsed.activeSleep || null,
+        };
+        return { babies: [baby], activeBabyId: baby.id };
+      }
+      return Object.assign(defaultState(), parsed);
     } catch (e) { /* estado corrupto: empezar de cero */ }
     return defaultState();
   }
 
   function save() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }
+
+  function currentBaby() {
+    return state.babies.find((b) => b.id === state.activeBabyId) || null;
   }
 
   // ---------- Utilidades ----------
@@ -63,7 +83,7 @@
     `${dayKey(d)}T${fmtTime(d)}`;
 
   function ageWeeks() {
-    const birth = new Date(state.baby.birth + "T00:00:00");
+    const birth = new Date(currentBaby().birth + "T00:00:00");
     return Math.max(0, Math.floor((Date.now() - birth) / (7 * 24 * 3600e3)));
   }
 
@@ -95,7 +115,7 @@
 
   function recentSessions(days) {
     const cutoff = Date.now() - days * 24 * 3600e3;
-    return [...state.sessions]
+    return [...currentBaby().sessions]
       .filter((s) => new Date(s.start).getTime() >= cutoff)
       .sort((a, b) => new Date(a.start) - new Date(b.start));
   }
@@ -160,7 +180,7 @@
 
   // ---------- Sesiones ----------
   function sortedSessions() {
-    return [...state.sessions].sort((a, b) => new Date(b.start) - new Date(a.start));
+    return [...currentBaby().sessions].sort((a, b) => new Date(b.start) - new Date(a.start));
   }
 
   function sessionsOverlappingDay(day) {
@@ -168,7 +188,7 @@
     const start = new Date(day); start.setHours(0, 0, 0, 0);
     const end = new Date(start); end.setDate(end.getDate() + 1);
     const out = [];
-    for (const s of state.sessions) {
+    for (const s of currentBaby().sessions) {
       const a = new Date(s.start), b = new Date(s.end);
       const from = Math.max(a, start), to = Math.min(b, end);
       if (to > from) out.push([s, (to - from) / 60000]);
@@ -183,7 +203,7 @@
       const lastEnd = new Date(done[0].end);
       if (lastEnd <= new Date()) return lastEnd;
     }
-    return timeAt(new Date(), state.baby.wakeTime);
+    return timeAt(new Date(), currentBaby().wakeTime);
   }
 
   function suggestType(start) {
@@ -209,7 +229,7 @@
 
   // ---------- Render: cabecera ----------
   function renderHeader() {
-    $("#baby-name").textContent = state.baby.name;
+    $("#baby-name").textContent = currentBaby().name;
     $("#baby-age").textContent = `${ageLabel()} · ${windowsForAge().label}`;
   }
 
@@ -220,18 +240,19 @@
     const timer = $("#big-timer");
     const pred = $("#prediction");
     const now = new Date();
+    const baby = currentBaby();
 
-    if (state.activeSleep) {
-      const secs = Math.floor((now - new Date(state.activeSleep.start)) / 1000);
-      status.textContent = `${state.baby.name} está durmiendo 💤`;
+    if (baby.activeSleep) {
+      const secs = Math.floor((now - new Date(baby.activeSleep.start)) / 1000);
+      status.textContent = `${baby.name} está durmiendo 💤`;
       timer.textContent = fmtTimer(secs);
       btn.textContent = "Despertar ☀️";
       btn.classList.add("sleeping");
-      pred.textContent = `Desde las ${fmtTime(new Date(state.activeSleep.start))}`;
+      pred.textContent = `Desde las ${fmtTime(new Date(baby.activeSleep.start))}`;
     } else {
       const wake = lastWakeTime();
       const awakeSecs = Math.floor((now - wake) / 1000);
-      status.textContent = `${state.baby.name} está despierto/a`;
+      status.textContent = `${baby.name} está despierto/a`;
       timer.textContent = awakeSecs >= 0 ? fmtTimer(awakeSecs) : "—";
       btn.textContent = "Empezar sueño 🌙";
       btn.classList.remove("sleeping");
@@ -257,7 +278,7 @@
     const now = new Date();
     const items = [];
 
-    let t = timeAt(new Date(), state.baby.wakeTime);
+    let t = timeAt(new Date(), currentBaby().wakeTime);
     items.push({ icon: "☀️", time: fmtTime(t), label: "Despertar", at: new Date(t) });
 
     for (let i = 1; i <= win.naps; i++) {
@@ -274,7 +295,7 @@
       t = end;
     }
 
-    const bed = timeAt(new Date(), state.baby.bedTime || "20:00");
+    const bed = timeAt(new Date(), currentBaby().bedTime || "20:00");
     items.push({ icon: "🌙", time: fmtTime(bed), label: "A dormir (noche)", at: bed });
 
     el.innerHTML = items
@@ -313,9 +334,10 @@
     for (const [s, mins] of list) {
       if (s.type === "nap") { nap += mins; napsCount++; } else night += mins;
     }
-    if (state.activeSleep) {
-      const mins = (Date.now() - new Date(state.activeSleep.start)) / 60000;
-      const t = suggestType(new Date(state.activeSleep.start));
+    const activeSleep = currentBaby().activeSleep;
+    if (activeSleep) {
+      const mins = (Date.now() - new Date(activeSleep.start)) / 60000;
+      const t = suggestType(new Date(activeSleep.start));
       if (t === "nap") nap += mins; else night += mins;
     }
     $("#today-summary").innerHTML = `
@@ -414,7 +436,7 @@
     const avgNight = withData.length ? withData.reduce((a, x) => a + x.night, 0) / withData.length : 0;
     const napsLast7 = days.reduce(
       (acc, d) => acc + sessionsOverlappingDay(d).filter(([s]) => s.type === "nap").length, 0);
-    const longest = state.sessions.reduce(
+    const longest = currentBaby().sessions.reduce(
       (acc, s) => Math.max(acc, (new Date(s.end) - new Date(s.start)) / 60000), 0);
 
     $("#stats-cards").innerHTML = `
@@ -426,10 +448,11 @@
 
   // ---------- Render: perfil ----------
   function renderProfile() {
-    $("#prof-name").value = state.baby.name;
-    $("#prof-birth").value = state.baby.birth;
-    $("#prof-wake").value = state.baby.wakeTime;
-    $("#prof-bed").value = state.baby.bedTime || "20:00";
+    const baby = currentBaby();
+    $("#prof-name").value = baby.name;
+    $("#prof-birth").value = baby.birth;
+    $("#prof-wake").value = baby.wakeTime;
+    $("#prof-bed").value = baby.bedTime || "20:00";
     const w = windowsForAge();
     const source = w.personalized
       ? "calculado a partir de tu historial de los últimos días"
@@ -437,6 +460,41 @@
     $("#prof-windows").textContent =
       `Ventana de vigilia ${fmtDur(w.min)} – ${fmtDur(w.max)}, ` +
       `${w.naps} siesta${w.naps === 1 ? "" : "s"} al día aprox. (${source}, edad: ${ageLabel()})`;
+    renderBabyList();
+  }
+
+  function renderBabyList() {
+    const el = $("#baby-list");
+    el.innerHTML = state.babies
+      .map((b) => {
+        const active = b.id === state.activeBabyId;
+        return `<div class="baby-row ${active ? "active" : ""}">
+          <div class="baby-row-name">${b.name}${active ? " · activo" : ""}</div>
+          <div class="baby-row-actions">
+            ${active ? "" : `<button class="btn-ghost" data-switch="${b.id}">Usar</button>`}
+            ${state.babies.length > 1 ? `<button class="btn-danger" data-delete="${b.id}">Eliminar</button>` : ""}
+          </div>
+        </div>`;
+      })
+      .join("");
+
+    $$("[data-switch]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        state.activeBabyId = btn.dataset.switch;
+        save();
+        renderAll();
+      })
+    );
+    $$("[data-delete]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const baby = state.babies.find((b) => b.id === btn.dataset.delete);
+        if (!confirm(`¿Eliminar a ${baby.name} y todo su registro de sueño?`)) return;
+        state.babies = state.babies.filter((b) => b.id !== btn.dataset.delete);
+        if (state.activeBabyId === btn.dataset.delete) state.activeBabyId = state.babies[0].id;
+        save();
+        renderAll();
+      })
+    );
   }
 
   // ---------- Sonidos (Web Audio) ----------
@@ -554,7 +612,7 @@
     $("#sess-delete").classList.toggle("hidden", !id);
     $("#modal-title").textContent = id ? "Editar sueño" : "Añadir sueño";
     if (id) {
-      const s = state.sessions.find((x) => x.id === id);
+      const s = currentBaby().sessions.find((x) => x.id === id);
       $("#sess-start").value = toLocalInput(new Date(s.start));
       $("#sess-end").value = toLocalInput(new Date(s.end));
       $("#sess-type").value = s.type;
@@ -586,7 +644,7 @@
   }
 
   function renderAll() {
-    if (!state.baby) return;
+    if (!currentBaby()) return;
     renderHeader();
     renderSleepCard();
     renderSchedule();
@@ -601,12 +659,13 @@
     // Onboarding
     $("#onb-form").addEventListener("submit", (e) => {
       e.preventDefault();
-      state.baby = {
+      const baby = newBaby({
         name: $("#onb-name").value.trim(),
         birth: $("#onb-birth").value,
         wakeTime: $("#onb-wake").value,
-        bedTime: "20:00",
-      };
+      });
+      state.babies.push(baby);
+      state.activeBabyId = baby.id;
       save();
       $("#onboarding").classList.add("hidden");
       $("#main").classList.remove("hidden");
@@ -615,20 +674,21 @@
 
     // Botón dormir/despertar
     $("#sleep-toggle").addEventListener("click", () => {
-      if (state.activeSleep) {
-        const start = new Date(state.activeSleep.start);
+      const baby = currentBaby();
+      if (baby.activeSleep) {
+        const start = new Date(baby.activeSleep.start);
         const end = new Date();
         if (end - start >= 60000) {
-          state.sessions.push({
+          baby.sessions.push({
             id: crypto.randomUUID(),
             start: start.toISOString(),
             end: end.toISOString(),
             type: suggestType(start),
           });
         }
-        state.activeSleep = null;
+        baby.activeSleep = null;
       } else {
-        state.activeSleep = { start: new Date().toISOString() };
+        baby.activeSleep = { start: new Date().toISOString() };
       }
       save();
       renderAll();
@@ -654,10 +714,11 @@
         end: end.toISOString(),
         type: $("#sess-type").value,
       };
+      const baby = currentBaby();
       if (editingId) {
-        Object.assign(state.sessions.find((s) => s.id === editingId), data);
+        Object.assign(baby.sessions.find((s) => s.id === editingId), data);
       } else {
-        state.sessions.push({ id: crypto.randomUUID(), ...data });
+        baby.sessions.push({ id: crypto.randomUUID(), ...data });
       }
       save();
       closeModal();
@@ -665,7 +726,8 @@
     });
     $("#sess-delete").addEventListener("click", () => {
       if (!confirm("¿Eliminar este registro?")) return;
-      state.sessions = state.sessions.filter((s) => s.id !== editingId);
+      const baby = currentBaby();
+      baby.sessions = baby.sessions.filter((s) => s.id !== editingId);
       save();
       closeModal();
       renderAll();
@@ -684,16 +746,42 @@
     // Perfil
     $("#profile-form").addEventListener("submit", (e) => {
       e.preventDefault();
-      state.baby = {
-        name: $("#prof-name").value.trim(),
-        birth: $("#prof-birth").value,
-        wakeTime: $("#prof-wake").value,
-        bedTime: $("#prof-bed").value,
-      };
+      const baby = currentBaby();
+      baby.name = $("#prof-name").value.trim();
+      baby.birth = $("#prof-birth").value;
+      baby.wakeTime = $("#prof-wake").value;
+      baby.bedTime = $("#prof-bed").value;
       save();
       renderAll();
       alert("Perfil guardado ✨");
     });
+
+    // Añadir otro bebé
+    $("#add-baby-toggle").addEventListener("click", () => {
+      $("#add-baby-form").classList.remove("hidden");
+      $("#add-baby-toggle").classList.add("hidden");
+    });
+    $("#add-baby-cancel").addEventListener("click", () => {
+      $("#add-baby-form").classList.add("hidden");
+      $("#add-baby-toggle").classList.remove("hidden");
+      $("#add-baby-form").reset();
+    });
+    $("#add-baby-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const baby = newBaby({
+        name: $("#newbaby-name").value.trim(),
+        birth: $("#newbaby-birth").value,
+        wakeTime: $("#newbaby-wake").value,
+      });
+      state.babies.push(baby);
+      state.activeBabyId = baby.id;
+      save();
+      $("#add-baby-form").reset();
+      $("#add-baby-form").classList.add("hidden");
+      $("#add-baby-toggle").classList.remove("hidden");
+      renderAll();
+    });
+
     $("#export-data").addEventListener("click", () => {
       const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
       const a = document.createElement("a");
@@ -703,7 +791,7 @@
       URL.revokeObjectURL(a.href);
     });
     $("#reset-data").addEventListener("click", () => {
-      if (!confirm("Esto borrará el perfil y todos los registros. ¿Continuar?")) return;
+      if (!confirm("Esto borrará todos los bebés y sus registros de este dispositivo. ¿Continuar?")) return;
       stopSound();
       localStorage.removeItem(STORAGE_KEY);
       state = defaultState();
@@ -714,7 +802,7 @@
   // ---------- Reloj y refresco ----------
   function tick() {
     $("#clock").textContent = fmtTime(new Date());
-    if (state.baby) {
+    if (currentBaby()) {
       renderSleepCard();
       renderTodaySummary();
     }
@@ -731,7 +819,7 @@
     buildSky();
     bindEvents();
     registerServiceWorker();
-    if (state.baby) {
+    if (currentBaby()) {
       $("#main").classList.remove("hidden");
       renderAll();
     } else {
@@ -742,7 +830,7 @@
     }
     tick();
     setInterval(tick, 1000);
-    setInterval(() => state.baby && renderSchedule(), 60000);
+    setInterval(() => currentBaby() && renderSchedule(), 60000);
   }
 
   init();

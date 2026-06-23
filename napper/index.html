@@ -121,6 +121,27 @@
       <section id="view-profile" class="view hidden">
         <h3 class="section-title">Perfil</h3>
         <div class="card">
+          <h4>Bebés en este dispositivo</h4>
+          <div id="baby-list"></div>
+          <button id="add-baby-toggle" class="btn-ghost">+ Añadir bebé</button>
+          <form id="add-baby-form" class="hidden">
+            <label>Nombre
+              <input type="text" id="newbaby-name" required maxlength="30" />
+            </label>
+            <label>Fecha de nacimiento
+              <input type="date" id="newbaby-birth" required />
+            </label>
+            <label>Hora habitual de despertar
+              <input type="time" id="newbaby-wake" value="07:30" required />
+            </label>
+            <div class="modal-actions">
+              <button type="button" id="add-baby-cancel" class="btn-ghost">Cancelar</button>
+              <button type="submit" class="btn-primary">Añadir</button>
+            </div>
+          </form>
+        </div>
+        <div class="card">
+          <h4>Editar bebé activo</h4>
           <form id="profile-form">
             <label>Nombre
               <input type="text" id="prof-name" required maxlength="30" />

@@ -293,6 +293,20 @@ input:focus, select:focus { outline: 2px solid var(--accent-2); }
 /* ---------- Perfil ---------- */
 .danger-zone { display: flex; flex-direction: column; gap: 10px; }
 
+.baby-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--card-border);
+}
+.baby-row:last-child { border-bottom: none; }
+.baby-row.active .baby-row-name { color: var(--accent); font-weight: 600; }
+.baby-row-actions { display: flex; gap: 8px; }
+#add-baby-toggle { margin-top: 10px; width: 100%; }
+#add-baby-form { margin-top: 14px; }
+
 /* ---------- Tab bar ---------- */
 #tabbar {
   position: fixed;
