@@ -4,7 +4,15 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#0b1026" />
+  <meta name="description" content="Predicción de siestas y seguimiento del sueño de tu bebé." />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Lunara" />
   <title>Lunara — Sueño del bebé</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon-192.png" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -46,12 +54,22 @@
       </header>
 
       <!-- HOY -->
-      <section id="view-today" class="view">
+      <section id="view-today" class="view" role="tabpanel" aria-labelledby="tab-today">
+        <div id="napdrop-alert" class="card napdrop-alert hidden" aria-live="polite"></div>
+
         <div id="sleep-card" class="card sleep-card">
-          <div id="status-label" class="status-label"></div>
+          <div id="status-label" class="status-label" aria-live="polite"></div>
           <div id="big-timer" class="big-timer">—</div>
-          <div id="prediction" class="prediction"></div>
+          <div id="prediction" class="prediction" aria-live="polite"></div>
           <button id="sleep-toggle" class="btn-sleep"></button>
+        </div>
+
+        <h3 class="section-title">Reloj de 24 horas</h3>
+        <div id="clock-wheel" class="card clock-card"></div>
+        <div class="clock-legend">
+          <span><i class="dot dot-pred"></i> Previsto</span>
+          <span><i class="dot dot-nap"></i> Siesta</span>
+          <span><i class="dot dot-night"></i> Noche</span>
         </div>
 
         <h3 class="section-title">Plan de hoy</h3>
@@ -59,19 +77,31 @@
 
         <h3 class="section-title">Sueño de hoy</h3>
         <div class="card today-summary" id="today-summary"></div>
+
+        <h3 class="section-title">Tomas y pañales de hoy</h3>
+        <div class="card today-summary" id="care-summary"></div>
+        <div class="quick-actions">
+          <button id="quick-feed" class="btn-ghost">🍼 Registrar toma</button>
+          <button id="quick-diaper" class="btn-ghost">🚼 Registrar pañal</button>
+        </div>
       </section>
 
       <!-- REGISTRO -->
-      <section id="view-log" class="view hidden">
+      <section id="view-log" class="view hidden" role="tabpanel" aria-labelledby="tab-log">
         <div class="row-between">
-          <h3 class="section-title">Registro de sueño</h3>
+          <h3 class="section-title">Registro</h3>
           <button id="add-session" class="btn-ghost">+ Añadir</button>
+        </div>
+        <div id="log-subtabs" class="subtabs" role="tablist" aria-label="Tipo de registro">
+          <button class="subtab active" data-sub="sleep" role="tab" aria-selected="true">😴 Sueño</button>
+          <button class="subtab" data-sub="feed" role="tab" aria-selected="false">🍼 Tomas</button>
+          <button class="subtab" data-sub="diaper" role="tab" aria-selected="false">🚼 Pañales</button>
         </div>
         <div id="log-list"></div>
       </section>
 
       <!-- ESTADÍSTICAS -->
-      <section id="view-stats" class="view hidden">
+      <section id="view-stats" class="view hidden" role="tabpanel" aria-labelledby="tab-stats">
         <h3 class="section-title">Últimos 7 días</h3>
         <div class="card">
           <div id="chart" class="chart"></div>
@@ -84,14 +114,17 @@
       </section>
 
       <!-- SONIDOS -->
-      <section id="view-sounds" class="view hidden">
+      <section id="view-sounds" class="view hidden" role="tabpanel" aria-labelledby="tab-sounds">
         <h3 class="section-title">Sonidos para dormir</h3>
         <div class="card sounds">
           <div class="sound-buttons">
-            <button class="sound-btn" data-sound="white">🌫️<span>Ruido blanco</span></button>
-            <button class="sound-btn" data-sound="pink">🌸<span>Ruido rosa</span></button>
-            <button class="sound-btn" data-sound="brown">🍂<span>Ruido marrón</span></button>
-            <button class="sound-btn" data-sound="heartbeat">💗<span>Latidos</span></button>
+            <button class="sound-btn" data-sound="white" aria-pressed="false">☁️<span>Ruido blanco</span></button>
+            <button class="sound-btn" data-sound="pink" aria-pressed="false">🌸<span>Ruido rosa</span></button>
+            <button class="sound-btn" data-sound="brown" aria-pressed="false">🍂<span>Ruido marrón</span></button>
+            <button class="sound-btn" data-sound="heartbeat" aria-pressed="false">💗<span>Latidos</span></button>
+            <button class="sound-btn" data-sound="rain" aria-pressed="false">🌧️<span>Lluvia</span></button>
+            <button class="sound-btn" data-sound="forest" aria-pressed="false">🌲<span>Bosque</span></button>
+            <button class="sound-btn" data-sound="lullaby" aria-pressed="false">🎶<span>Nana</span></button>
           </div>
           <label class="slider-row">Volumen
             <input type="range" id="volume" min="0" max="100" value="40" />
@@ -110,9 +143,34 @@
       </section>
 
       <!-- PERFIL -->
-      <section id="view-profile" class="view hidden">
+      <section id="view-profile" class="view hidden" role="tabpanel" aria-labelledby="tab-profile">
         <h3 class="section-title">Perfil</h3>
         <div class="card">
+          <h4>Apariencia</h4>
+          <button id="theme-toggle" class="btn-ghost" type="button" aria-pressed="false">🌙 Modo oscuro</button>
+        </div>
+        <div class="card">
+          <h4>Bebés en este dispositivo</h4>
+          <div id="baby-list"></div>
+          <button id="add-baby-toggle" class="btn-ghost">+ Añadir bebé</button>
+          <form id="add-baby-form" class="hidden">
+            <label>Nombre
+              <input type="text" id="newbaby-name" required maxlength="30" />
+            </label>
+            <label>Fecha de nacimiento
+              <input type="date" id="newbaby-birth" required />
+            </label>
+            <label>Hora habitual de despertar
+              <input type="time" id="newbaby-wake" value="07:30" required />
+            </label>
+            <div class="modal-actions">
+              <button type="button" id="add-baby-cancel" class="btn-ghost">Cancelar</button>
+              <button type="submit" class="btn-primary">Añadir</button>
+            </div>
+          </form>
+        </div>
+        <div class="card">
+          <h4>Editar bebé activo</h4>
           <form id="profile-form">
             <label>Nombre
               <input type="text" id="prof-name" required maxlength="30" />
@@ -139,18 +197,18 @@
         </div>
       </section>
 
-      <nav id="tabbar">
-        <button class="tab active" data-view="today">🌙<span>Hoy</span></button>
-        <button class="tab" data-view="log">📋<span>Registro</span></button>
-        <button class="tab" data-view="stats">📊<span>Datos</span></button>
-        <button class="tab" data-view="sounds">🎵<span>Sonidos</span></button>
-        <button class="tab" data-view="profile">⚙️<span>Perfil</span></button>
+      <nav id="tabbar" role="tablist" aria-label="Secciones de Lunara">
+        <button id="tab-today" class="tab active" data-view="today" role="tab" aria-selected="true" aria-controls="view-today">🌙<span>Hoy</span></button>
+        <button id="tab-log" class="tab" data-view="log" role="tab" aria-selected="false" aria-controls="view-log">📋<span>Registro</span></button>
+        <button id="tab-stats" class="tab" data-view="stats" role="tab" aria-selected="false" aria-controls="view-stats">📊<span>Datos</span></button>
+        <button id="tab-sounds" class="tab" data-view="sounds" role="tab" aria-selected="false" aria-controls="view-sounds">🎵<span>Sonidos</span></button>
+        <button id="tab-profile" class="tab" data-view="profile" role="tab" aria-selected="false" aria-controls="view-profile">⚙️<span>Perfil</span></button>
       </nav>
     </main>
 
     <!-- Modal añadir/editar sesión -->
     <div id="modal" class="modal hidden">
-      <div class="modal-card">
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
         <h3 id="modal-title">Añadir sueño</h3>
         <form id="session-form">
           <label>Inicio
@@ -168,6 +226,66 @@
           <div class="modal-actions">
             <button type="button" id="sess-delete" class="btn-danger hidden">Eliminar</button>
             <button type="button" id="sess-cancel" class="btn-ghost">Cancelar</button>
+            <button type="submit" class="btn-primary">Guardar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal añadir/editar toma -->
+    <div id="feed-modal" class="modal hidden">
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="feed-modal-title">
+        <h3 id="feed-modal-title">Añadir toma</h3>
+        <form id="feed-form">
+          <label>Hora
+            <input type="datetime-local" id="feed-time" required />
+          </label>
+          <label>Tipo
+            <select id="feed-type">
+              <option value="breast">Pecho</option>
+              <option value="bottle">Biberón</option>
+            </select>
+          </label>
+          <label id="feed-side-row">Lado
+            <select id="feed-side">
+              <option value="left">Izquierdo</option>
+              <option value="right">Derecho</option>
+              <option value="both">Ambos</option>
+            </select>
+          </label>
+          <label id="feed-duration-row">Duración (min)
+            <input type="number" id="feed-duration" min="0" max="180" />
+          </label>
+          <label id="feed-amount-row" class="hidden">Cantidad (ml)
+            <input type="number" id="feed-amount" min="0" max="500" />
+          </label>
+          <div class="modal-actions">
+            <button type="button" id="feed-delete" class="btn-danger hidden">Eliminar</button>
+            <button type="button" id="feed-cancel" class="btn-ghost">Cancelar</button>
+            <button type="submit" class="btn-primary">Guardar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal añadir/editar pañal -->
+    <div id="diaper-modal" class="modal hidden">
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="diaper-modal-title">
+        <h3 id="diaper-modal-title">Añadir pañal</h3>
+        <form id="diaper-form">
+          <label>Hora
+            <input type="datetime-local" id="diaper-time" required />
+          </label>
+          <label>Tipo
+            <select id="diaper-type">
+              <option value="wet">Mojado</option>
+              <option value="dirty">Sucio</option>
+              <option value="mixed">Mixto</option>
+            </select>
+          </label>
+          <div class="modal-actions">
+            <button type="button" id="diaper-delete" class="btn-danger hidden">Eliminar</button>
+            <button type="button" id="diaper-cancel" class="btn-ghost">Cancelar</button>
             <button type="submit" class="btn-primary">Guardar</button>
           </div>
         </form>

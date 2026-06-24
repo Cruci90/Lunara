@@ -1,0 +1,13 @@
+{
+  "name": "lunara",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Lunara — app de seguimiento de sueño del bebé (estilo Napper). App estática sin build; estas dependencias son solo para tests.",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.0",
+    "http-server": "^14.1.1"
+  }
+}
