@@ -783,7 +783,7 @@
   }
 
   // ---------- Sonidos (Web Audio) ----------
-  const sound = { ctx: null, node: null, gain: null, current: null, timerId: null, offAt: null };
+  const sound = { ctx: null, node: null, extraNodes: [], gain: null, current: null, timerId: null, offAt: null };
 
   function makeNoiseBuffer(ctx, type) {
     const len = ctx.sampleRate * 2;
@@ -846,6 +846,110 @@
         beatGain.gain.linearRampToValueAtTime(0, t + 0.42);
       }
       sound.node = osc;
+    } else if (type === "rain") {
+      // Base de fondo: ruido blanco filtrado en banda (efecto "pattering").
+      const bedSrc = ctx.createBufferSource();
+      bedSrc.buffer = makeNoiseBuffer(ctx, "white");
+      bedSrc.loop = true;
+      const bedFilter = ctx.createBiquadFilter();
+      bedFilter.type = "bandpass";
+      bedFilter.frequency.value = 1200;
+      bedFilter.Q.value = 0.5;
+      const bedGain = ctx.createGain();
+      bedGain.gain.value = 0.35;
+      bedSrc.connect(bedFilter).connect(bedGain).connect(sound.gain);
+      bedSrc.start();
+
+      // Gotas: ráfagas de ruido agudo con envolvente, sobre la misma base.
+      const dripSrc = ctx.createBufferSource();
+      dripSrc.buffer = makeNoiseBuffer(ctx, "white");
+      dripSrc.loop = true;
+      const dripFilter = ctx.createBiquadFilter();
+      dripFilter.type = "highpass";
+      dripFilter.frequency.value = 2500;
+      const dripGain = ctx.createGain();
+      dripGain.gain.value = 0;
+      dripSrc.connect(dripFilter).connect(dripGain).connect(sound.gain);
+      dripSrc.start();
+
+      let t = ctx.currentTime + 0.05;
+      for (let i = 0; i < 4000; i++) {
+        const peak = 0.25 + Math.random() * 0.5;
+        const dur = 0.03 + Math.random() * 0.05;
+        dripGain.gain.setValueAtTime(0, t);
+        dripGain.gain.linearRampToValueAtTime(peak, t + 0.008);
+        dripGain.gain.linearRampToValueAtTime(0, t + dur);
+        t += 0.08 + Math.random() * 0.28;
+      }
+      sound.node = bedSrc;
+      sound.extraNodes = [dripSrc];
+    } else if (type === "forest") {
+      // Viento de fondo: ruido marrón muy filtrado.
+      const windSrc = ctx.createBufferSource();
+      windSrc.buffer = makeNoiseBuffer(ctx, "brown");
+      windSrc.loop = true;
+      const windFilter = ctx.createBiquadFilter();
+      windFilter.type = "lowpass";
+      windFilter.frequency.value = 350;
+      const windGain = ctx.createGain();
+      windGain.gain.value = 0.6;
+      windSrc.connect(windFilter).connect(windGain).connect(sound.gain);
+      windSrc.start();
+
+      // Pájaros: un único oscilador con frecuencia y ganancia automatizadas
+      // por cada gorjeo, espaciados de forma aleatoria.
+      const chirpOsc = ctx.createOscillator();
+      chirpOsc.type = "sine";
+      chirpOsc.frequency.value = 1800;
+      const chirpGain = ctx.createGain();
+      chirpGain.gain.value = 0;
+      chirpOsc.connect(chirpGain).connect(sound.gain);
+      chirpOsc.start();
+
+      const basePitches = [1600, 1900, 2200, 1750];
+      let ct = ctx.currentTime + 1;
+      for (let i = 0; i < 150; i++) {
+        const base = basePitches[Math.floor(Math.random() * basePitches.length)];
+        const notes = 2 + Math.floor(Math.random() * 2);
+        let nt = ct;
+        for (let n = 0; n < notes; n++) {
+          const freq = base * (0.95 + Math.random() * 0.1);
+          chirpOsc.frequency.setValueAtTime(freq, nt);
+          chirpGain.gain.setValueAtTime(0, nt);
+          chirpGain.gain.linearRampToValueAtTime(0.22, nt + 0.02);
+          chirpGain.gain.linearRampToValueAtTime(0, nt + 0.09);
+          nt += 0.12;
+        }
+        ct = nt + 3 + Math.random() * 6;
+      }
+      sound.node = windSrc;
+      sound.extraNodes = [chirpOsc];
+    } else if (type === "lullaby") {
+      // Nana sencilla: un oscilador con una breve frase en escala pentatónica
+      // que se repite, automatizando frecuencia y ganancia nota a nota.
+      const osc = ctx.createOscillator();
+      osc.type = "triangle";
+      osc.frequency.value = 440;
+      const noteGain = ctx.createGain();
+      noteGain.gain.value = 0;
+      osc.connect(noteGain).connect(sound.gain);
+      osc.start();
+
+      const scale = [261.63, 293.66, 329.63, 392.0, 440.0, 523.25];
+      const melody = [0, 2, 4, 2, 0, 3, 2, 0];
+      const noteDur = 0.6;
+      let lt = ctx.currentTime + 0.1;
+      for (let rep = 0; rep < 150; rep++) {
+        for (const idx of melody) {
+          osc.frequency.setValueAtTime(scale[idx], lt);
+          noteGain.gain.setValueAtTime(0, lt);
+          noteGain.gain.linearRampToValueAtTime(0.3, lt + 0.08);
+          noteGain.gain.linearRampToValueAtTime(0, lt + noteDur * 0.9);
+          lt += noteDur;
+        }
+        lt += 0.4;
+      }
+      sound.node = osc;
     } else {
       const src = ctx.createBufferSource();
       src.buffer = makeNoiseBuffer(ctx, type);
@@ -871,6 +975,8 @@
 
   function stopSound(updateUI = true) {
     if (sound.node) { try { sound.node.stop(); } catch (e) {} sound.node = null; }
+    sound.extraNodes.forEach((n) => { try { n.stop(); } catch (e) {} });
+    sound.extraNodes = [];
     if (sound.gain) { sound.gain.disconnect(); sound.gain = null; }
     if (sound.timerId) { clearTimeout(sound.timerId); sound.timerId = null; }
     sound.current = null;

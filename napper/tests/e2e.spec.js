@@ -254,6 +254,34 @@ test.describe("Sonidos", () => {
     await page.click('.sound-btn[data-sound="white"]');
     await expect(page.locator("#sound-status")).toContainText("Sin sonido");
   });
+
+  for (const sound of ["rain", "forest", "lullaby"]) {
+    test(`reproducir y detener el sonido "${sound}" sin errores`, async ({ page }) => {
+      const errors = [];
+      page.on("pageerror", (e) => errors.push(e.message));
+      await onboard(page);
+      await page.click('.tab[data-view="sounds"]');
+      await page.click(`.sound-btn[data-sound="${sound}"]`);
+      await expect(page.locator(`.sound-btn[data-sound="${sound}"]`)).toHaveAttribute("aria-pressed", "true");
+      await expect(page.locator("#sound-status")).toContainText("Reproduciendo");
+      await page.click(`.sound-btn[data-sound="${sound}"]`);
+      await expect(page.locator(`.sound-btn[data-sound="${sound}"]`)).toHaveAttribute("aria-pressed", "false");
+      expect(errors).toEqual([]);
+    });
+  }
+
+  test("cambiar rápido entre varios sonidos no deja más de uno activo ni lanza errores", async ({ page }) => {
+    const errors = [];
+    page.on("pageerror", (e) => errors.push(e.message));
+    await onboard(page);
+    await page.click('.tab[data-view="sounds"]');
+    for (const s of ["white", "rain", "forest", "lullaby", "heartbeat", "pink"]) {
+      await page.click(`.sound-btn[data-sound="${s}"]`);
+    }
+    await expect(page.locator(".sound-btn.active")).toHaveCount(1);
+    await expect(page.locator('.sound-btn[data-sound="pink"]')).toHaveClass(/active/);
+    expect(errors).toEqual([]);
+  });
 });
 
 test.describe("Perfil", () => {
