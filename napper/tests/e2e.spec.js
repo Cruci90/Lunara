@@ -308,6 +308,53 @@ test.describe("Predicción inteligente", () => {
   });
 });
 
+async function injectDailySessions(page, { days, napsPerDay }) {
+  await page.evaluate(({ days, napsPerDay }) => {
+    const state = JSON.parse(localStorage.getItem("lunara_state_v1"));
+    const baby = state.babies.find((b) => b.id === state.activeBabyId);
+    const sessions = [];
+    const now = new Date();
+    for (let d = days; d >= 1; d--) {
+      const day = new Date(now); day.setDate(day.getDate() - d); day.setHours(0, 0, 0, 0);
+      let t = new Date(day); t.setHours(7, 0, 0, 0);
+      for (let n = 0; n < napsPerDay; n++) {
+        const start = new Date(t.getTime() + 90 * 60000);
+        const end = new Date(start.getTime() + 45 * 60000);
+        sessions.push({ id: `n${n}-${d}`, start: start.toISOString(), end: end.toISOString(), type: "nap" });
+        t = end;
+      }
+      const bedStart = new Date(day); bedStart.setHours(19, 30, 0, 0);
+      const bedEnd = new Date(day); bedEnd.setDate(bedEnd.getDate() + 1); bedEnd.setHours(7, 0, 0, 0);
+      sessions.push({ id: `night-${d}`, start: bedStart.toISOString(), end: bedEnd.toISOString(), type: "night" });
+    }
+    baby.sessions = sessions;
+    localStorage.setItem("lunara_state_v1", JSON.stringify(state));
+  }, { days, napsPerDay });
+}
+
+test.describe("Aviso de transición de siestas (nap-drop)", () => {
+  test("no muestra aviso sin suficiente historial", async ({ page }) => {
+    await onboard(page, { monthsAgo: 5 });
+    await expect(page.locator("#napdrop-alert")).toBeHidden();
+  });
+
+  test("no muestra aviso si las siestas registradas coinciden con lo esperado para la edad", async ({ page }) => {
+    await onboard(page, { monthsAgo: 5 }); // 4-6 meses → 3 siestas esperadas
+    await injectDailySessions(page, { days: 4, napsPerDay: 3 });
+    await page.reload();
+    await expect(page.locator("#napdrop-alert")).toBeHidden();
+  });
+
+  test("muestra aviso cuando hay consistentemente menos siestas de las esperadas", async ({ page }) => {
+    await onboard(page, { monthsAgo: 5 }); // 4-6 meses → 3 siestas esperadas
+    await injectDailySessions(page, { days: 4, napsPerDay: 2 });
+    await page.reload();
+    await expect(page.locator("#napdrop-alert")).toBeVisible();
+    await expect(page.locator("#napdrop-alert")).toContainText("2 siestas");
+    await expect(page.locator("#napdrop-alert")).toContainText("3 habituales");
+  });
+});
+
 test.describe("Multi-perfil (varios bebés)", () => {
   test("añadir un segundo bebé, cambiar entre ellos y eliminar uno", async ({ page }) => {
     await onboard(page, { name: "Vega" });

@@ -210,6 +210,35 @@
     };
   }
 
+  // Detecta una posible transición a menos siestas: compara el nº de siestas
+  // realmente registrado en los últimos días con el esperado para la edad
+  // (tabla, no personalizado, para no enmascarar la transición ya en curso).
+  const NAPDROP_LOOKBACK_DAYS = 7;
+  const NAPDROP_RECENT_DAYS = 4;
+  const NAPDROP_MIN_LOW_DAYS = 3;
+
+  function detectNapDrop() {
+    const expected = ageWindow().naps;
+    if (expected <= 1) return null;
+
+    const days = [];
+    for (let i = 1; i <= NAPDROP_LOOKBACK_DAYS; i++) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      days.push(d);
+    }
+    const loggedDayCounts = days
+      .map((d) => sessionsOverlappingDay(d))
+      .filter((sessions) => sessions.length > 0)
+      .map((sessions) => sessions.filter(([s]) => s.type === "nap").length);
+
+    if (loggedDayCounts.length < NAPDROP_RECENT_DAYS) return null;
+    const recent = loggedDayCounts.slice(0, NAPDROP_RECENT_DAYS);
+    const lowDays = recent.filter((c) => c < expected).length;
+    if (lowDays < NAPDROP_MIN_LOW_DAYS) return null;
+
+    return { from: expected, to: Math.round(median(recent)) };
+  }
+
   function timeAt(dateBase, hhmm) {
     const [h, m] = hhmm.split(":").map(Number);
     const d = new Date(dateBase);
@@ -303,6 +332,21 @@
   }
 
   // ---------- Render: tarjeta de sueño + predicción ----------
+  // ---------- Render: aviso de transición de siestas ----------
+  function renderNapDropAlert() {
+    const el = $("#napdrop-alert");
+    if (!el) return;
+    const drop = detectNapDrop();
+    if (!drop) {
+      el.classList.add("hidden");
+      return;
+    }
+    el.classList.remove("hidden");
+    el.innerHTML = `🔄 <strong>Posible transición de siestas</strong><br/>
+      En los últimos días, ${currentBaby().name} ha hecho ${drop.to} siesta${drop.to === 1 ? "" : "s"}
+      en vez de las ${drop.from} habituales para su edad. Podría estar preparándose para reducir el número de siestas.`;
+  }
+
   function renderSleepCard() {
     const btn = $("#sleep-toggle");
     const status = $("#status-label");
@@ -974,6 +1018,7 @@
   function renderAll() {
     if (!currentBaby()) return;
     renderHeader();
+    renderNapDropAlert();
     renderSleepCard();
     renderClock();
     renderSchedule();

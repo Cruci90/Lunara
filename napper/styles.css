@@ -191,6 +191,14 @@ input:focus, select:focus { outline: 2px solid var(--accent-2); }
   cursor: pointer;
 }
 
+/* ---------- Aviso de transición de siestas ---------- */
+.napdrop-alert {
+  border-color: var(--accent);
+  background: rgba(255, 217, 138, 0.1);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
 /* ---------- Tarjeta de sueño ---------- */
 .sleep-card { text-align: center; padding: 26px 16px; }
 .status-label { font-size: 0.95rem; color: var(--muted); margin-bottom: 6px; }
