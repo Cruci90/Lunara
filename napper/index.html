@@ -75,13 +75,25 @@
 
         <h3 class="section-title">Sueño de hoy</h3>
         <div class="card today-summary" id="today-summary"></div>
+
+        <h3 class="section-title">Tomas y pañales de hoy</h3>
+        <div class="card today-summary" id="care-summary"></div>
+        <div class="quick-actions">
+          <button id="quick-feed" class="btn-ghost">🍼 Registrar toma</button>
+          <button id="quick-diaper" class="btn-ghost">🚼 Registrar pañal</button>
+        </div>
       </section>
 
       <!-- REGISTRO -->
       <section id="view-log" class="view hidden" role="tabpanel" aria-labelledby="tab-log">
         <div class="row-between">
-          <h3 class="section-title">Registro de sueño</h3>
+          <h3 class="section-title">Registro</h3>
           <button id="add-session" class="btn-ghost">+ Añadir</button>
+        </div>
+        <div id="log-subtabs" class="subtabs" role="tablist" aria-label="Tipo de registro">
+          <button class="subtab active" data-sub="sleep" role="tab" aria-selected="true">😴 Sueño</button>
+          <button class="subtab" data-sub="feed" role="tab" aria-selected="false">🍼 Tomas</button>
+          <button class="subtab" data-sub="diaper" role="tab" aria-selected="false">🚼 Pañales</button>
         </div>
         <div id="log-list"></div>
       </section>
@@ -209,6 +221,66 @@
           <div class="modal-actions">
             <button type="button" id="sess-delete" class="btn-danger hidden">Eliminar</button>
             <button type="button" id="sess-cancel" class="btn-ghost">Cancelar</button>
+            <button type="submit" class="btn-primary">Guardar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal añadir/editar toma -->
+    <div id="feed-modal" class="modal hidden">
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="feed-modal-title">
+        <h3 id="feed-modal-title">Añadir toma</h3>
+        <form id="feed-form">
+          <label>Hora
+            <input type="datetime-local" id="feed-time" required />
+          </label>
+          <label>Tipo
+            <select id="feed-type">
+              <option value="breast">Pecho</option>
+              <option value="bottle">Biberón</option>
+            </select>
+          </label>
+          <label id="feed-side-row">Lado
+            <select id="feed-side">
+              <option value="left">Izquierdo</option>
+              <option value="right">Derecho</option>
+              <option value="both">Ambos</option>
+            </select>
+          </label>
+          <label id="feed-duration-row">Duración (min)
+            <input type="number" id="feed-duration" min="0" max="180" />
+          </label>
+          <label id="feed-amount-row" class="hidden">Cantidad (ml)
+            <input type="number" id="feed-amount" min="0" max="500" />
+          </label>
+          <div class="modal-actions">
+            <button type="button" id="feed-delete" class="btn-danger hidden">Eliminar</button>
+            <button type="button" id="feed-cancel" class="btn-ghost">Cancelar</button>
+            <button type="submit" class="btn-primary">Guardar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal añadir/editar pañal -->
+    <div id="diaper-modal" class="modal hidden">
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="diaper-modal-title">
+        <h3 id="diaper-modal-title">Añadir pañal</h3>
+        <form id="diaper-form">
+          <label>Hora
+            <input type="datetime-local" id="diaper-time" required />
+          </label>
+          <label>Tipo
+            <select id="diaper-type">
+              <option value="wet">Mojado</option>
+              <option value="dirty">Sucio</option>
+              <option value="mixed">Mixto</option>
+            </select>
+          </label>
+          <div class="modal-actions">
+            <button type="button" id="diaper-delete" class="btn-danger hidden">Eliminar</button>
+            <button type="button" id="diaper-cancel" class="btn-ghost">Cancelar</button>
             <button type="submit" class="btn-primary">Guardar</button>
           </div>
         </form>

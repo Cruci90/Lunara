@@ -143,6 +143,99 @@ test.describe("Editar siestas desde el plan de hoy", () => {
   });
 });
 
+test.describe("Tomas y pañales", () => {
+  test("registrar una toma de pecho desde el registro", async ({ page }) => {
+    await onboard(page);
+    await page.click('.tab[data-view="log"]');
+    await page.click('.subtab[data-sub="feed"]');
+    await page.click("#add-session");
+    await expect(page.locator("#feed-modal")).toBeVisible();
+    await expect(page.locator("#feed-side-row")).toBeVisible();
+    await expect(page.locator("#feed-amount-row")).toBeHidden();
+    await page.selectOption("#feed-side", "right");
+    await page.fill("#feed-duration", "12");
+    await page.click("#feed-form button[type=submit]");
+    await expect(page.locator("#feed-modal")).toBeHidden();
+    await expect(page.locator("[data-feed-id]")).toHaveCount(1);
+    await expect(page.locator("[data-feed-id]")).toContainText("derecho");
+  });
+
+  test("registrar un biberón muestra el campo de cantidad", async ({ page }) => {
+    await onboard(page);
+    await page.click('.tab[data-view="log"]');
+    await page.click('.subtab[data-sub="feed"]');
+    await page.click("#add-session");
+    await page.selectOption("#feed-type", "bottle");
+    await expect(page.locator("#feed-amount-row")).toBeVisible();
+    await expect(page.locator("#feed-side-row")).toBeHidden();
+    await page.fill("#feed-amount", "120");
+    await page.click("#feed-form button[type=submit]");
+    await expect(page.locator("[data-feed-id]")).toContainText("120 ml");
+  });
+
+  test("editar y eliminar una toma", async ({ page }) => {
+    await onboard(page);
+    await page.click('.tab[data-view="log"]');
+    await page.click('.subtab[data-sub="feed"]');
+    await page.click("#add-session");
+    await page.click("#feed-form button[type=submit]");
+    await page.click("[data-feed-id]");
+    await expect(page.locator("#feed-modal-title")).toHaveText("Editar toma");
+    page.once("dialog", (d) => d.accept());
+    await page.click("#feed-delete");
+    await expect(page.locator("[data-feed-id]")).toHaveCount(0);
+  });
+
+  test("registrar un pañal y verlo reflejado en el resumen de hoy", async ({ page }) => {
+    await onboard(page);
+    await page.click('.tab[data-view="log"]');
+    await page.click('.subtab[data-sub="diaper"]');
+    await page.click("#add-session");
+    await expect(page.locator("#diaper-modal")).toBeVisible();
+    await page.selectOption("#diaper-type", "dirty");
+    await page.click("#diaper-form button[type=submit]");
+    await expect(page.locator("[data-diaper-id]")).toHaveCount(1);
+    await expect(page.locator("[data-diaper-id]")).toContainText("Sucio");
+
+    await page.click('.tab[data-view="today"]');
+    await expect(page.locator("#care-summary")).toContainText("1");
+  });
+
+  test("las acciones rápidas de Hoy abren los modales correspondientes", async ({ page }) => {
+    await onboard(page);
+    await page.click("#quick-feed");
+    await expect(page.locator("#feed-modal")).toBeVisible();
+    await page.click("#feed-cancel");
+    await expect(page.locator("#feed-modal")).toBeHidden();
+
+    await page.click("#quick-diaper");
+    await expect(page.locator("#diaper-modal")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#diaper-modal")).toBeHidden();
+  });
+
+  test("cada bebé mantiene tomas y pañales separados", async ({ page }) => {
+    await onboard(page, { name: "Vega" });
+    await page.click('.tab[data-view="log"]');
+    await page.click('.subtab[data-sub="feed"]');
+    await page.click("#add-session");
+    await page.click("#feed-form button[type=submit]");
+    await expect(page.locator("[data-feed-id]")).toHaveCount(1);
+
+    await page.click('.tab[data-view="profile"]');
+    await page.click("#add-baby-toggle");
+    await page.fill("#newbaby-name", "Nova");
+    const d = new Date(); d.setMonth(d.getMonth() - 2);
+    await page.fill("#newbaby-birth", d.toISOString().slice(0, 10));
+    await page.fill("#newbaby-wake", "08:00");
+    await page.click("#add-baby-form button[type=submit]");
+
+    await page.click('.tab[data-view="log"]');
+    await page.click('.subtab[data-sub="feed"]');
+    await expect(page.locator("[data-feed-id]")).toHaveCount(0);
+  });
+});
+
 test.describe("Estadísticas", () => {
   test("la gráfica muestra 7 columnas", async ({ page }) => {
     await onboard(page);

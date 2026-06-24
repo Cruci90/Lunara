@@ -46,14 +46,28 @@
   ];
 
   // ---------- Estado (múltiples bebés por dispositivo) ----------
-  // baby: { id, name, birth, wakeTime, bedTime, sessions: [{id,start,end,type}], activeSleep: {start}|null }
+  // baby: { id, name, birth, wakeTime, bedTime,
+  //         sessions: [{id,start,end,type}], activeSleep: {start}|null,
+  //         feedings: [{id,time,type:'breast'|'bottle',side?,amountMl?,durationMin?}],
+  //         diapers: [{id,time,type:'wet'|'dirty'|'mixed'}] }
   const defaultState = () => ({
     babies: [],
     activeBabyId: null,
   });
 
   function newBaby({ name, birth, wakeTime, bedTime = "20:00" }) {
-    return { id: crypto.randomUUID(), name, birth, wakeTime, bedTime, sessions: [], activeSleep: null };
+    return {
+      id: crypto.randomUUID(), name, birth, wakeTime, bedTime,
+      sessions: [], activeSleep: null, feedings: [], diapers: [],
+    };
+  }
+
+  function normalizeBaby(baby) {
+    baby.sessions = baby.sessions || [];
+    baby.feedings = baby.feedings || [];
+    baby.diapers = baby.diapers || [];
+    baby.activeSleep = baby.activeSleep || null;
+    return baby;
   }
 
   let state = load();
@@ -65,15 +79,17 @@
       const parsed = JSON.parse(raw);
       if (parsed.baby && !parsed.babies) {
         // Migración desde el formato de un solo bebé.
-        const baby = {
+        const baby = normalizeBaby({
           id: crypto.randomUUID(),
           ...parsed.baby,
           sessions: parsed.sessions || [],
           activeSleep: parsed.activeSleep || null,
-        };
+        });
         return { babies: [baby], activeBabyId: baby.id };
       }
-      return Object.assign(defaultState(), parsed);
+      const result = Object.assign(defaultState(), parsed);
+      result.babies = (result.babies || []).map(normalizeBaby);
+      return result;
     } catch (e) { /* estado corrupto: empezar de cero */ }
     return defaultState();
   }
@@ -233,6 +249,36 @@
     const h = start.getHours();
     return h >= 18 || h < 6 ? "night" : "nap";
   }
+
+  // ---------- Tomas y pañales ----------
+  function sortedFeedings() {
+    return [...currentBaby().feedings].sort((a, b) => new Date(b.time) - new Date(a.time));
+  }
+
+  function sortedDiapers() {
+    return [...currentBaby().diapers].sort((a, b) => new Date(b.time) - new Date(a.time));
+  }
+
+  function isSameDay(d, day) {
+    return dayKey(d) === dayKey(day);
+  }
+
+  function feedingsForDay(day) {
+    return currentBaby().feedings.filter((f) => isSameDay(new Date(f.time), day));
+  }
+
+  function diapersForDay(day) {
+    return currentBaby().diapers.filter((d) => isSameDay(new Date(d.time), day));
+  }
+
+  function feedingLabel(f) {
+    if (f.type === "bottle") return `Biberón${f.amountMl ? ` · ${f.amountMl} ml` : ""}`;
+    const sideLabel = { left: "izquierdo", right: "derecho", both: "ambos lados" }[f.side] || "";
+    return `Pecho${sideLabel ? ` · ${sideLabel}` : ""}${f.durationMin ? ` · ${f.durationMin} min` : ""}`;
+  }
+
+  const DIAPER_LABELS = { wet: "Mojado", dirty: "Sucio", mixed: "Mixto" };
+  const DIAPER_ICONS = { wet: "💧", dirty: "💩", mixed: "🚼" };
 
   // ---------- Cielo estrellado ----------
   function buildSky() {
@@ -458,32 +504,57 @@
       <div><div class="num">${fmtDur(night)}</div><div class="lbl">Noche</div></div>`;
   }
 
+  function renderCareSummary() {
+    const today = new Date();
+    const feeds = feedingsForDay(today);
+    const diapers = diapersForDay(today);
+    const wetCount = diapers.filter((d) => d.type === "wet" || d.type === "mixed").length;
+    const dirtyCount = diapers.filter((d) => d.type === "dirty" || d.type === "mixed").length;
+    $("#care-summary").innerHTML = `
+      <div><div class="num">${feeds.length}</div><div class="lbl">Tomas</div></div>
+      <div><div class="num">${diapers.length}</div><div class="lbl">Pañales</div></div>
+      <div><div class="num">${wetCount}/${dirtyCount}</div><div class="lbl">Mojado/Sucio</div></div>`;
+  }
+
   // ---------- Render: registro ----------
+  const dayNamesEs = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
+
+  function dayTitle(k) {
+    const todayK = dayKey(new Date());
+    const yest = new Date(); yest.setDate(yest.getDate() - 1);
+    if (k === todayK) return "Hoy";
+    if (k === dayKey(yest)) return "Ayer";
+    const d = new Date(k + "T12:00:00");
+    return `${dayNamesEs[d.getDay()]} ${d.getDate()}/${d.getMonth() + 1}`;
+  }
+
+  function groupByDay(items, getDate) {
+    const groups = new Map();
+    for (const it of items) {
+      const k = dayKey(getDate(it));
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(it);
+    }
+    return Array.from(groups.entries());
+  }
+
+  let logSubview = "sleep";
+
   function renderLog() {
     const el = $("#log-list");
+    if (logSubview === "feed") return renderFeedLog(el);
+    if (logSubview === "diaper") return renderDiaperLog(el);
+    return renderSleepLog(el);
+  }
+
+  function renderSleepLog(el) {
     const sessions = sortedSessions();
     if (!sessions.length) {
       el.innerHTML = `<div class="empty-msg">Aún no hay sueño registrado.<br/>Usa el botón del temporizador o «+ Añadir».</div>`;
       return;
     }
-    const groups = new Map();
-    for (const s of sessions) {
-      const k = dayKey(new Date(s.start));
-      if (!groups.has(k)) groups.set(k, []);
-      groups.get(k).push(s);
-    }
-    const dayNames = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
-    const todayK = dayKey(new Date());
-    const yest = new Date(); yest.setDate(yest.getDate() - 1);
-    const yestK = dayKey(yest);
-
-    el.innerHTML = Array.from(groups.entries())
+    el.innerHTML = groupByDay(sessions, (s) => new Date(s.start))
       .map(([k, list]) => {
-        const d = new Date(k + "T12:00:00");
-        let title;
-        if (k === todayK) title = "Hoy";
-        else if (k === yestK) title = "Ayer";
-        else title = `${dayNames[d.getDay()]} ${d.getDate()}/${d.getMonth() + 1}`;
         const total = list.reduce((acc, s) => acc + (new Date(s.end) - new Date(s.start)) / 60000, 0);
         const rows = list
           .map((s) => {
@@ -500,13 +571,71 @@
           })
           .join("");
         return `<div class="log-day">
-          <div class="log-day-title">${title} · ${fmtDur(total)}</div>${rows}
+          <div class="log-day-title">${dayTitle(k)} · ${fmtDur(total)}</div>${rows}
         </div>`;
       })
       .join("");
 
     $$(".log-item").forEach((item) =>
       item.addEventListener("click", () => openModal(item.dataset.id))
+    );
+  }
+
+  function renderFeedLog(el) {
+    const feedings = sortedFeedings();
+    if (!feedings.length) {
+      el.innerHTML = `<div class="empty-msg">Aún no hay tomas registradas.<br/>Usa «+ Añadir».</div>`;
+      return;
+    }
+    el.innerHTML = groupByDay(feedings, (f) => new Date(f.time))
+      .map(([k, list]) => {
+        const rows = list
+          .map((f) => `<div class="log-item" data-feed-id="${f.id}">
+              <div class="log-icon">${f.type === "bottle" ? "🍼" : "🤱"}</div>
+              <div class="log-main">
+                <div class="log-times">${fmtTime(new Date(f.time))}</div>
+                <div class="log-dur">${feedingLabel(f)}</div>
+              </div>
+              <div class="muted">✏️</div>
+            </div>`)
+          .join("");
+        return `<div class="log-day">
+          <div class="log-day-title">${dayTitle(k)} · ${list.length} toma${list.length === 1 ? "" : "s"}</div>${rows}
+        </div>`;
+      })
+      .join("");
+
+    $$("[data-feed-id]").forEach((item) =>
+      item.addEventListener("click", () => openFeedModal(item.dataset.feedId))
+    );
+  }
+
+  function renderDiaperLog(el) {
+    const diapers = sortedDiapers();
+    if (!diapers.length) {
+      el.innerHTML = `<div class="empty-msg">Aún no hay pañales registrados.<br/>Usa «+ Añadir».</div>`;
+      return;
+    }
+    el.innerHTML = groupByDay(diapers, (d) => new Date(d.time))
+      .map(([k, list]) => {
+        const rows = list
+          .map((d) => `<div class="log-item" data-diaper-id="${d.id}">
+              <div class="log-icon">${DIAPER_ICONS[d.type]}</div>
+              <div class="log-main">
+                <div class="log-times">${fmtTime(new Date(d.time))}</div>
+                <div class="log-dur">${DIAPER_LABELS[d.type]}</div>
+              </div>
+              <div class="muted">✏️</div>
+            </div>`)
+          .join("");
+        return `<div class="log-day">
+          <div class="log-day-title">${dayTitle(k)} · ${list.length} pañal${list.length === 1 ? "" : "es"}</div>${rows}
+        </div>`;
+      })
+      .join("");
+
+    $$("[data-diaper-id]").forEach((item) =>
+      item.addEventListener("click", () => openDiaperModal(item.dataset.diaperId))
     );
   }
 
@@ -754,6 +883,82 @@
     if (modalTrigger) { modalTrigger.focus(); modalTrigger = null; }
   }
 
+  // ---------- Modal de toma ----------
+  let editingFeedId = null;
+
+  function updateFeedFormVisibility() {
+    const isBreast = $("#feed-type").value === "breast";
+    $("#feed-side-row").classList.toggle("hidden", !isBreast);
+    $("#feed-duration-row").classList.toggle("hidden", !isBreast);
+    $("#feed-amount-row").classList.toggle("hidden", isBreast);
+  }
+
+  function openFeedModal(id = null) {
+    editingFeedId = id;
+    modalTrigger = document.activeElement;
+    const form = $("#feed-form");
+    form.reset();
+    $("#feed-delete").classList.toggle("hidden", !id);
+    $("#feed-modal-title").textContent = id ? "Editar toma" : "Añadir toma";
+    if (id) {
+      const f = currentBaby().feedings.find((x) => x.id === id);
+      $("#feed-time").value = toLocalInput(new Date(f.time));
+      $("#feed-type").value = f.type;
+      if (f.type === "breast") {
+        $("#feed-side").value = f.side || "left";
+        $("#feed-duration").value = f.durationMin || "";
+      } else {
+        $("#feed-amount").value = f.amountMl || "";
+      }
+    } else {
+      $("#feed-time").value = toLocalInput(new Date());
+      $("#feed-type").value = "breast";
+    }
+    updateFeedFormVisibility();
+    $("#feed-modal").classList.remove("hidden");
+    $("#feed-time").focus();
+  }
+
+  function closeFeedModal() {
+    $("#feed-modal").classList.add("hidden");
+    editingFeedId = null;
+    if (modalTrigger) { modalTrigger.focus(); modalTrigger = null; }
+  }
+
+  // ---------- Modal de pañal ----------
+  let editingDiaperId = null;
+
+  function openDiaperModal(id = null) {
+    editingDiaperId = id;
+    modalTrigger = document.activeElement;
+    const form = $("#diaper-form");
+    form.reset();
+    $("#diaper-delete").classList.toggle("hidden", !id);
+    $("#diaper-modal-title").textContent = id ? "Editar pañal" : "Añadir pañal";
+    if (id) {
+      const d = currentBaby().diapers.find((x) => x.id === id);
+      $("#diaper-time").value = toLocalInput(new Date(d.time));
+      $("#diaper-type").value = d.type;
+    } else {
+      $("#diaper-time").value = toLocalInput(new Date());
+      $("#diaper-type").value = "wet";
+    }
+    $("#diaper-modal").classList.remove("hidden");
+    $("#diaper-time").focus();
+  }
+
+  function closeDiaperModal() {
+    $("#diaper-modal").classList.add("hidden");
+    editingDiaperId = null;
+    if (modalTrigger) { modalTrigger.focus(); modalTrigger = null; }
+  }
+
+  function openAddForCurrentSubview() {
+    if (logSubview === "feed") openFeedModal();
+    else if (logSubview === "diaper") openDiaperModal();
+    else openModal();
+  }
+
   // ---------- Vistas ----------
   function showView(name) {
     $$(".view").forEach((v) => v.classList.add("hidden"));
@@ -773,6 +978,7 @@
     renderClock();
     renderSchedule();
     renderTodaySummary();
+    renderCareSummary();
     renderLog();
     renderStats();
     renderProfile();
@@ -785,7 +991,10 @@
 
     // Cerrar el modal con Escape
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && !$("#modal").classList.contains("hidden")) closeModal();
+      if (e.key !== "Escape") return;
+      if (!$("#modal").classList.contains("hidden")) closeModal();
+      else if (!$("#feed-modal").classList.contains("hidden")) closeFeedModal();
+      else if (!$("#diaper-modal").classList.contains("hidden")) closeDiaperModal();
     });
 
     // Onboarding
@@ -831,10 +1040,89 @@
       t.addEventListener("click", () => showView(t.dataset.view)));
 
     // Registro
-    $("#add-session").addEventListener("click", () => openModal());
+    $("#add-session").addEventListener("click", () => openAddForCurrentSubview());
     $("#sess-cancel").addEventListener("click", closeModal);
     $("#modal").addEventListener("click", (e) => {
       if (e.target.id === "modal") closeModal();
+    });
+
+    // Sub-pestañas del registro (sueño / tomas / pañales)
+    $$(".subtab").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        logSubview = btn.dataset.sub;
+        $$(".subtab").forEach((b) => {
+          const active = b === btn;
+          b.classList.toggle("active", active);
+          b.setAttribute("aria-selected", String(active));
+        });
+        renderLog();
+      })
+    );
+
+    // Acciones rápidas (Hoy)
+    $("#quick-feed").addEventListener("click", () => openFeedModal());
+    $("#quick-diaper").addEventListener("click", () => openDiaperModal());
+
+    // Toma
+    $("#feed-type").addEventListener("change", updateFeedFormVisibility);
+    $("#feed-cancel").addEventListener("click", closeFeedModal);
+    $("#feed-modal").addEventListener("click", (e) => {
+      if (e.target.id === "feed-modal") closeFeedModal();
+    });
+    $("#feed-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const type = $("#feed-type").value;
+      const data = { time: new Date($("#feed-time").value).toISOString(), type };
+      if (type === "breast") {
+        data.side = $("#feed-side").value;
+        data.durationMin = Number($("#feed-duration").value) || undefined;
+      } else {
+        data.amountMl = Number($("#feed-amount").value) || undefined;
+      }
+      const baby = currentBaby();
+      if (editingFeedId) {
+        Object.assign(baby.feedings.find((f) => f.id === editingFeedId), data);
+      } else {
+        baby.feedings.push({ id: crypto.randomUUID(), ...data });
+      }
+      save();
+      closeFeedModal();
+      renderAll();
+    });
+    $("#feed-delete").addEventListener("click", () => {
+      if (!confirm("¿Eliminar esta toma?")) return;
+      const baby = currentBaby();
+      baby.feedings = baby.feedings.filter((f) => f.id !== editingFeedId);
+      save();
+      closeFeedModal();
+      renderAll();
+    });
+
+    // Pañal
+    $("#diaper-cancel").addEventListener("click", closeDiaperModal);
+    $("#diaper-modal").addEventListener("click", (e) => {
+      if (e.target.id === "diaper-modal") closeDiaperModal();
+    });
+    $("#diaper-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const data = { time: new Date($("#diaper-time").value).toISOString(), type: $("#diaper-type").value };
+      const baby = currentBaby();
+      if (editingDiaperId) {
+        Object.assign(baby.diapers.find((d) => d.id === editingDiaperId), data);
+      } else {
+        baby.diapers.push({ id: crypto.randomUUID(), ...data });
+      }
+      save();
+      closeDiaperModal();
+      renderAll();
+    });
+    $("#diaper-delete").addEventListener("click", () => {
+      if (!confirm("¿Eliminar este pañal?")) return;
+      const baby = currentBaby();
+      baby.diapers = baby.diapers.filter((d) => d.id !== editingDiaperId);
+      save();
+      closeDiaperModal();
+      renderAll();
     });
     $("#session-form").addEventListener("submit", (e) => {
       e.preventDefault();

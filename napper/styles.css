@@ -259,6 +259,24 @@ input:focus, select:focus { outline: 2px solid var(--accent-2); }
 .today-summary .num { font-size: 1.4rem; font-weight: 700; }
 .today-summary .lbl { font-size: 0.8rem; color: var(--muted); }
 
+/* ---------- Subtabs (Registro) ---------- */
+.subtabs { display: flex; gap: 8px; margin-bottom: 14px; }
+.subtab {
+  flex: 1;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+  padding: 8px 6px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.subtab.active { color: var(--accent); border-color: var(--accent); }
+
+/* ---------- Acciones rápidas (Hoy) ---------- */
+.quick-actions { display: flex; gap: 10px; margin-top: 4px; }
+.quick-actions .btn-ghost { flex: 1; }
+
 /* ---------- Registro ---------- */
 .log-day { margin-bottom: 6px; }
 .log-day-title { margin: 16px 0 8px; font-size: 0.9rem; color: var(--muted); }
