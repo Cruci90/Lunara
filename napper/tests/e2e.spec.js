@@ -1,11 +1,11 @@
 const { test, expect } = require("@playwright/test");
 
-async function onboard(page, { name = "Vega", monthsAgo = 4, wake = "07:30" } = {}) {
+async function onboard(page, { name = "Vega", monthsAgo = 4, wake = "07:30", birth } = {}) {
   await page.goto("/index.html");
   await page.fill("#onb-name", name);
   const d = new Date();
   d.setMonth(d.getMonth() - monthsAgo);
-  await page.fill("#onb-birth", d.toISOString().slice(0, 10));
+  await page.fill("#onb-birth", birth || d.toISOString().slice(0, 10));
   await page.fill("#onb-wake", wake);
   await page.click("#onb-form button[type=submit]");
   await page.waitForSelector("#main:not(.hidden)");
@@ -534,5 +534,122 @@ test.describe("PWA", () => {
     await expect(page.locator("#main")).toBeVisible();
     await expect(page.locator("#baby-name")).toHaveText("Offline-Test");
     await context.setOffline(false);
+  });
+});
+
+async function setSessions(page, sessions) {
+  await page.evaluate((sessions) => {
+    const state = JSON.parse(localStorage.getItem("lunara_state_v1"));
+    const baby = state.babies.find((b) => b.id === state.activeBabyId);
+    baby.sessions = sessions.map(([start, end, type], i) => ({
+      id: `s${i}`, start: new Date(start).toISOString(), end: new Date(end).toISOString(), type,
+    }));
+    localStorage.setItem("lunara_state_v1", JSON.stringify(state));
+  }, sessions);
+  await page.reload();
+}
+
+test.describe("Tiempo despierto", () => {
+  test("si la noche no se registró, cuenta desde la hora habitual y no desde ayer", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-06-24T10:00:00"));
+    await onboard(page, { wake: "07:30", birth: "2026-01-24" });
+    await setSessions(page, [["2026-06-23T15:00:00", "2026-06-23T16:00:00", "nap"]]);
+    await expect(page.locator("#big-timer")).toHaveText("2:30:00");
+  });
+
+  test("una noche registrada que acaba antes de la hora habitual manda", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-06-24T10:00:00"));
+    await onboard(page, { wake: "07:30", birth: "2026-01-24" });
+    await setSessions(page, [["2026-06-23T19:30:00", "2026-06-24T06:30:00", "night"]]);
+    await expect(page.locator("#big-timer")).toHaveText("3:30:00");
+  });
+});
+
+test.describe("Plan de hoy adaptable", () => {
+  test("parte del despertar real y prevé las siestas desde la última registrada", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-06-24T10:00:00"));
+    await onboard(page, { wake: "07:30", birth: "2026-01-24" }); // 5 meses → 3 siestas
+    await setSessions(page, [
+      ["2026-06-23T19:30:00", "2026-06-24T06:45:00", "night"],
+      ["2026-06-24T08:30:00", "2026-06-24T09:40:00", "nap"],
+    ]);
+    const items = page.locator(".sched-item");
+    await expect(items.nth(0)).toContainText("06:45");
+    await expect(items.nth(1)).toContainText("08:30 – 09:40");
+    await expect(items.nth(2)).toContainText("11:40"); // 09:40 + ventana media de 2 h
+    await expect(page.locator(".clock-pred")).toHaveCount(2);
+
+    await items.nth(1).click();
+    await expect(page.locator("#modal-title")).toHaveText("Editar sueño");
+  });
+
+  test("no prevé siestas que acabarían demasiado cerca de la hora de dormir", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-06-24T14:30:00"));
+    await onboard(page, { wake: "07:30", birth: "2026-01-24" });
+    await setSessions(page, [["2026-06-24T13:00:00", "2026-06-24T14:00:00", "nap"]]);
+    // Siesta 2 prevista 16:00–17:15; una tercera acabaría a las 20:30, después de dormir.
+    await expect(page.locator(".clock-pred")).toHaveCount(1);
+    await expect(page.locator("#schedule")).not.toContainText("Siesta 3");
+  });
+
+  test("una siesta en curso aparece en el plan", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-06-24T10:00:00"));
+    await onboard(page, { wake: "07:30", birth: "2026-01-24" });
+    await page.click("#sleep-toggle");
+    await expect(page.locator("#schedule")).toContainText("Siesta 1 (en curso)");
+  });
+});
+
+test.describe("Robustez", () => {
+  test("el nombre del bebé se muestra como texto, no como HTML", async ({ page }) => {
+    await onboard(page, { name: "<b>x</b>" });
+    await page.click('.tab[data-view="profile"]');
+    await expect(page.locator(".baby-row-name")).toContainText("<b>x</b>");
+    await expect(page.locator(".baby-row-name b")).toHaveCount(0);
+  });
+
+  test("cambiar una toma de pecho a biberón no deja campos del pecho", async ({ page }) => {
+    await onboard(page);
+    await page.click("#quick-feed");
+    await page.selectOption("#feed-side", "right");
+    await page.fill("#feed-duration", "12");
+    await page.click("#feed-form button[type=submit]");
+
+    await page.click('.tab[data-view="log"]');
+    await page.click('.subtab[data-sub="feed"]');
+    await page.click("[data-feed-id]");
+    await page.selectOption("#feed-type", "bottle");
+    await page.fill("#feed-amount", "90");
+    await page.click("#feed-form button[type=submit]");
+
+    const feed = await page.evaluate(() => {
+      const state = JSON.parse(localStorage.getItem("lunara_state_v1"));
+      return state.babies[0].feedings[0];
+    });
+    expect(feed).toMatchObject({ type: "bottle", amountMl: 90 });
+    expect(feed.side).toBeUndefined();
+    expect(feed.durationMin).toBeUndefined();
+  });
+
+  test("todos los sonidos se reproducen en bucle y no se agotan", async ({ page }) => {
+    await page.addInitScript(() => {
+      window.__sources = [];
+      for (const proto of [AudioScheduledSourceNode.prototype, AudioBufferSourceNode.prototype]) {
+        const origStart = proto.start;
+        proto.start = function (...args) {
+          window.__sources.push({ kind: this.constructor.name, loop: Boolean(this.loop) });
+          return origStart.apply(this, args);
+        };
+      }
+    });
+    await onboard(page);
+    await page.click('.tab[data-view="sounds"]');
+    for (const s of ["white", "pink", "brown", "heartbeat", "rain", "forest", "lullaby"]) {
+      await page.evaluate(() => { window.__sources = []; });
+      await page.click(`.sound-btn[data-sound="${s}"]`);
+      const sources = await page.evaluate(() => window.__sources);
+      expect(sources.length, s).toBeGreaterThan(0);
+      for (const src of sources) expect(src, s).toEqual({ kind: "AudioBufferSourceNode", loop: true });
+    }
   });
 });

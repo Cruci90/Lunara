@@ -117,6 +117,8 @@
     const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
     return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
   };
+  const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   const dayKey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const toLocalInput = (d) =>
     `${dayKey(d)}T${fmtTime(d)}`;
@@ -264,14 +266,31 @@
     return out;
   }
 
+  const HOUR_MS = 3600e3;
+
   function lastWakeTime() {
-    // Fin de la última sesión terminada; si no hay, hora habitual de despertar de hoy.
-    const done = sortedSessions().filter((s) => s.end);
-    if (done.length) {
-      const lastEnd = new Date(done[0].end);
-      if (lastEnd <= new Date()) return lastEnd;
-    }
-    return timeAt(new Date(), currentBaby().wakeTime);
+    const now = new Date();
+    const ends = currentBaby().sessions.map((s) => new Date(s.end)).filter((d) => d <= now);
+    const lastEnd = ends.length ? new Date(Math.max(...ends)) : null;
+    const todayWake = timeAt(now, currentBaby().wakeTime);
+    // Un registro de hoy manda, incluida una noche que acaba antes de la hora habitual.
+    if (lastEnd && lastEnd > todayWake - 6 * HOUR_MS) return lastEnd;
+    // Si la noche no se registró, se asume la hora habitual de despertar.
+    if (todayWake <= now) return todayWake;
+    // De madrugada solo cuenta un registro reciente (p. ej. un despertar nocturno).
+    return lastEnd && now - lastEnd < 4 * HOUR_MS ? lastEnd : todayWake;
+  }
+
+  // Hora real de despertar de hoy: fin de la última noche registrada que acaba
+  // hoy antes del mediodía; si no hay, la hora habitual del perfil.
+  function morningWakeTime() {
+    const now = new Date();
+    const noon = timeAt(now, "12:00");
+    const ends = currentBaby().sessions
+      .filter((s) => s.type === "night")
+      .map((s) => new Date(s.end))
+      .filter((d) => isSameDay(d, now) && d < noon && d <= now);
+    return ends.length ? new Date(Math.max(...ends)) : timeAt(now, currentBaby().wakeTime);
   }
 
   function suggestType(start) {
@@ -343,7 +362,7 @@
     }
     el.classList.remove("hidden");
     el.innerHTML = `🔄 <strong>Posible transición de siestas</strong><br/>
-      En los últimos días, ${currentBaby().name} ha hecho ${drop.to} siesta${drop.to === 1 ? "" : "s"}
+      En los últimos días, ${escapeHtml(currentBaby().name)} ha hecho ${drop.to} siesta${drop.to === 1 ? "" : "s"}
       en vez de las ${drop.from} habituales para su edad. Podría estar preparándose para reducir el número de siestas.`;
   }
 
@@ -385,20 +404,63 @@
   }
 
   // ---------- Plan del día (predicción) ----------
+  // Se recalcula con cada registro: parte de la hora real de despertar, muestra
+  // las siestas ya hechas o en curso y prevé solo las que caben antes de dormir.
   function buildScheduleItems() {
     const win = windowsForAge();
+    const baby = currentBaby();
+    const now = new Date();
     const items = [];
 
-    let t = timeAt(new Date(), currentBaby().wakeTime);
-    items.push({ icon: "☀️", time: fmtTime(t), label: "Despertar", at: new Date(t) });
+    const wake = morningWakeTime();
+    items.push({ icon: "☀️", time: fmtTime(wake), label: "Despertar", at: wake });
 
-    for (let i = 1; i <= win.naps; i++) {
+    const doneNaps = baby.sessions
+      .filter((s) => s.type === "nap")
+      .map((s) => ({ id: s.id, start: new Date(s.start), end: new Date(s.end) }))
+      .filter((s) => isSameDay(s.start, now) && s.start >= wake)
+      .sort((a, b) => a.start - b.start);
+
+    let n = 0;
+    let t = wake;
+    for (const s of doneNaps) {
+      n++;
+      items.push({
+        icon: "✅",
+        time: `${fmtTime(s.start)} – ${fmtTime(s.end)}`,
+        label: `Siesta ${n}`,
+        at: s.start,
+        until: s.end,
+        sessionId: s.id,
+      });
+      if (s.end > t) t = s.end;
+    }
+
+    const active = baby.activeSleep && new Date(baby.activeSleep.start);
+    if (active && suggestType(active) === "nap" && active >= wake) {
+      n++;
+      const end = new Date(Math.max(active.getTime() + win.napAvg * 60000, now.getTime()));
+      items.push({
+        icon: "💤",
+        time: `${fmtTime(active)} – ~${fmtTime(end)}`,
+        label: `Siesta ${n} (en curso)`,
+        at: active,
+        until: end,
+      });
+      t = end;
+    }
+
+    const bed = timeAt(now, baby.bedTime || "20:00");
+    const latestNapEnd = new Date(bed.getTime() - win.min * 60000);
+    while (n < win.naps) {
       const start = new Date(t.getTime() + ((win.min + win.max) / 2) * 60000);
       const end = new Date(start.getTime() + win.napAvg * 60000);
+      if (end > latestNapEnd) break;
+      n++;
       items.push({
         icon: "😴",
         time: `${fmtTime(start)} – ${fmtTime(end)}`,
-        label: `Siesta ${i}`,
+        label: `Siesta ${n}`,
         at: start,
         until: end,
         nap: true,
@@ -406,7 +468,6 @@
       t = end;
     }
 
-    const bed = timeAt(new Date(), currentBaby().bedTime || "20:00");
     items.push({ icon: "🌙", time: fmtTime(bed), label: "A dormir (noche)", at: bed });
     return items;
   }
@@ -421,9 +482,12 @@
       .map((it, idx) => {
         const past = (it.until || it.at) < now;
         const current = it.at <= now && now <= (it.until || it.at);
-        const clickable = it.nap;
+        const clickable = it.nap || it.sessionId;
+        const data = it.sessionId
+          ? `data-id="${it.sessionId}"`
+          : it.nap ? `data-start="${it.at.toISOString()}" data-end="${it.until.toISOString()}"` : "";
         return `<div class="sched-item ${past ? "past" : ""} ${current ? "current" : ""} ${clickable ? "sched-clickable" : ""}"
-          ${clickable ? `data-idx="${idx}" data-start="${it.at.toISOString()}" data-end="${it.until.toISOString()}"` : ""}>
+          ${data}>
           <div class="sched-icon">${it.icon}</div>
           <div class="sched-time">${it.time}</div>
           <div>${it.label}</div>
@@ -434,6 +498,7 @@
 
     $$(".sched-clickable").forEach((item) =>
       item.addEventListener("click", () => {
+        if (item.dataset.id) return openModal(item.dataset.id);
         const predStart = new Date(item.dataset.start);
         const predEnd = new Date(item.dataset.end);
         const existing = sessionsOverlappingDay(predStart)
@@ -754,7 +819,7 @@
       .map((b) => {
         const active = b.id === state.activeBabyId;
         return `<div class="baby-row ${active ? "active" : ""}">
-          <div class="baby-row-name">${b.name}${active ? " · activo" : ""}</div>
+          <div class="baby-row-name">${escapeHtml(b.name)}${active ? " · activo" : ""}</div>
           <div class="baby-row-actions">
             ${active ? "" : `<button class="btn-ghost" data-switch="${b.id}">Usar</button>`}
             ${state.babies.length > 1 ? `<button class="btn-danger" data-delete="${b.id}">Eliminar</button>` : ""}
@@ -783,7 +848,7 @@
   }
 
   // ---------- Sonidos (Web Audio) ----------
-  const sound = { ctx: null, node: null, extraNodes: [], gain: null, current: null, timerId: null, offAt: null };
+  const sound = { ctx: null, sources: [], gain: null, current: null, timerId: null, offAt: null };
 
   function makeNoiseBuffer(ctx, type) {
     const len = ctx.sampleRate * 2;
@@ -815,6 +880,46 @@
     return buffer;
   }
 
+  function envelopeAt(env, t) {
+    for (let i = 1; i < env.length; i++) {
+      const [t0, v0] = env[i - 1], [t1, v1] = env[i];
+      if (t <= t1) return t1 === t0 ? v1 : v0 + ((v1 - v0) * (t - t0)) / (t1 - t0);
+    }
+    return 0;
+  }
+
+  // Sonidos con notas o golpes sueltos: se renderizan en un buffer que luego
+  // se reproduce en bucle, así nunca se acaban (con o sin temporizador).
+  // Cada evento debe terminar antes del final del buffer para que el bucle no haga clic.
+  function makeEventBuffer(ctx, seconds, events) {
+    const sr = ctx.sampleRate;
+    const buffer = ctx.createBuffer(1, Math.round(sr * seconds), sr);
+    const out = buffer.getChannelData(0);
+    for (const ev of events) {
+      const from = Math.round(ev.at * sr);
+      const len = Math.min(Math.round(ev.dur * sr), out.length - from);
+      for (let i = 0; i < len; i++) {
+        const t = i / sr;
+        let v;
+        if (ev.wave === "noise") v = Math.random() * 2 - 1;
+        else if (ev.wave === "triangle") v = (2 / Math.PI) * Math.asin(Math.sin(2 * Math.PI * ev.freq * t));
+        else v = Math.sin(2 * Math.PI * ev.freq * t);
+        out[from + i] += v * envelopeAt(ev.env, t);
+      }
+    }
+    return buffer;
+  }
+
+  function loopSource(ctx, buffer, destination) {
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+    src.connect(destination);
+    src.start();
+    sound.sources.push(src);
+    return src;
+  }
+
   function startSound(type) {
     stopSound(false);
     sound.ctx = sound.ctx || new (window.AudioContext || window.webkitAudioContext)();
@@ -826,140 +931,69 @@
     sound.gain.connect(ctx.destination);
 
     if (type === "heartbeat") {
-      // Latido: oscilador grave con pulsos lub-dub mediante LFO de ganancia.
-      const osc = ctx.createOscillator();
-      osc.type = "sine";
-      osc.frequency.value = 55;
-      const beatGain = ctx.createGain();
-      beatGain.gain.value = 0;
-      osc.connect(beatGain).connect(sound.gain);
-      osc.start();
-      const period = 60 / 65; // ~65 ppm
-      const t0 = ctx.currentTime + 0.05;
-      for (let i = 0; i < 600; i++) {
-        const t = t0 + i * period;
-        beatGain.gain.setValueAtTime(0, t);
-        beatGain.gain.linearRampToValueAtTime(1, t + 0.05);
-        beatGain.gain.linearRampToValueAtTime(0, t + 0.18);
-        beatGain.gain.setValueAtTime(0, t + 0.25);
-        beatGain.gain.linearRampToValueAtTime(0.7, t + 0.3);
-        beatGain.gain.linearRampToValueAtTime(0, t + 0.42);
-      }
-      sound.node = osc;
+      // Un latido "lub-dub" a ~65 ppm; el buffer dura exactamente un periodo.
+      const buf = makeEventBuffer(ctx, 60 / 65, [{ at: 0, dur: 0.45, freq: 55, wave: "sine",
+        env: [[0, 0], [0.05, 1], [0.18, 0], [0.25, 0], [0.3, 0.7], [0.42, 0]] }]);
+      loopSource(ctx, buf, sound.gain);
     } else if (type === "rain") {
       // Base de fondo: ruido blanco filtrado en banda (efecto "pattering").
-      const bedSrc = ctx.createBufferSource();
-      bedSrc.buffer = makeNoiseBuffer(ctx, "white");
-      bedSrc.loop = true;
       const bedFilter = ctx.createBiquadFilter();
       bedFilter.type = "bandpass";
       bedFilter.frequency.value = 1200;
       bedFilter.Q.value = 0.5;
       const bedGain = ctx.createGain();
       bedGain.gain.value = 0.35;
-      bedSrc.connect(bedFilter).connect(bedGain).connect(sound.gain);
-      bedSrc.start();
+      bedFilter.connect(bedGain).connect(sound.gain);
+      loopSource(ctx, makeNoiseBuffer(ctx, "white"), bedFilter);
 
-      // Gotas: ráfagas de ruido agudo con envolvente, sobre la misma base.
-      const dripSrc = ctx.createBufferSource();
-      dripSrc.buffer = makeNoiseBuffer(ctx, "white");
-      dripSrc.loop = true;
+      // Gotas: ráfagas cortas de ruido agudo repartidas al azar.
+      const drips = [];
+      for (let t = 0.05; t < 19.8; t += 0.08 + Math.random() * 0.28) {
+        const dur = 0.03 + Math.random() * 0.05;
+        drips.push({ at: t, dur, wave: "noise",
+          env: [[0, 0], [0.008, 0.25 + Math.random() * 0.5], [dur, 0]] });
+      }
       const dripFilter = ctx.createBiquadFilter();
       dripFilter.type = "highpass";
       dripFilter.frequency.value = 2500;
-      const dripGain = ctx.createGain();
-      dripGain.gain.value = 0;
-      dripSrc.connect(dripFilter).connect(dripGain).connect(sound.gain);
-      dripSrc.start();
-
-      let t = ctx.currentTime + 0.05;
-      for (let i = 0; i < 4000; i++) {
-        const peak = 0.25 + Math.random() * 0.5;
-        const dur = 0.03 + Math.random() * 0.05;
-        dripGain.gain.setValueAtTime(0, t);
-        dripGain.gain.linearRampToValueAtTime(peak, t + 0.008);
-        dripGain.gain.linearRampToValueAtTime(0, t + dur);
-        t += 0.08 + Math.random() * 0.28;
-      }
-      sound.node = bedSrc;
-      sound.extraNodes = [dripSrc];
+      dripFilter.connect(sound.gain);
+      loopSource(ctx, makeEventBuffer(ctx, 20, drips), dripFilter);
     } else if (type === "forest") {
       // Viento de fondo: ruido marrón muy filtrado.
-      const windSrc = ctx.createBufferSource();
-      windSrc.buffer = makeNoiseBuffer(ctx, "brown");
-      windSrc.loop = true;
       const windFilter = ctx.createBiquadFilter();
       windFilter.type = "lowpass";
       windFilter.frequency.value = 350;
       const windGain = ctx.createGain();
       windGain.gain.value = 0.6;
-      windSrc.connect(windFilter).connect(windGain).connect(sound.gain);
-      windSrc.start();
+      windFilter.connect(windGain).connect(sound.gain);
+      loopSource(ctx, makeNoiseBuffer(ctx, "brown"), windFilter);
 
-      // Pájaros: un único oscilador con frecuencia y ganancia automatizadas
-      // por cada gorjeo, espaciados de forma aleatoria.
-      const chirpOsc = ctx.createOscillator();
-      chirpOsc.type = "sine";
-      chirpOsc.frequency.value = 1800;
-      const chirpGain = ctx.createGain();
-      chirpGain.gain.value = 0;
-      chirpOsc.connect(chirpGain).connect(sound.gain);
-      chirpOsc.start();
-
+      // Pájaros: gorjeos de 2-3 notas espaciados de forma aleatoria.
       const basePitches = [1600, 1900, 2200, 1750];
-      let ct = ctx.currentTime + 1;
-      for (let i = 0; i < 150; i++) {
+      const chirps = [];
+      for (let t = 1; t < 38; t += 3 + Math.random() * 6) {
         const base = basePitches[Math.floor(Math.random() * basePitches.length)];
         const notes = 2 + Math.floor(Math.random() * 2);
-        let nt = ct;
-        for (let n = 0; n < notes; n++) {
-          const freq = base * (0.95 + Math.random() * 0.1);
-          chirpOsc.frequency.setValueAtTime(freq, nt);
-          chirpGain.gain.setValueAtTime(0, nt);
-          chirpGain.gain.linearRampToValueAtTime(0.22, nt + 0.02);
-          chirpGain.gain.linearRampToValueAtTime(0, nt + 0.09);
-          nt += 0.12;
+        for (let n = 0; n < notes; n++, t += 0.12) {
+          chirps.push({ at: t, dur: 0.09, wave: "sine", freq: base * (0.95 + Math.random() * 0.1),
+            env: [[0, 0], [0.02, 0.22], [0.09, 0]] });
         }
-        ct = nt + 3 + Math.random() * 6;
       }
-      sound.node = windSrc;
-      sound.extraNodes = [chirpOsc];
+      loopSource(ctx, makeEventBuffer(ctx, 40, chirps), sound.gain);
     } else if (type === "lullaby") {
-      // Nana sencilla: un oscilador con una breve frase en escala pentatónica
-      // que se repite, automatizando frecuencia y ganancia nota a nota.
-      const osc = ctx.createOscillator();
-      osc.type = "triangle";
-      osc.frequency.value = 440;
-      const noteGain = ctx.createGain();
-      noteGain.gain.value = 0;
-      osc.connect(noteGain).connect(sound.gain);
-      osc.start();
-
+      // Nana sencilla: una frase en escala pentatónica seguida de una pausa.
       const scale = [261.63, 293.66, 329.63, 392.0, 440.0, 523.25];
       const melody = [0, 2, 4, 2, 0, 3, 2, 0];
       const noteDur = 0.6;
-      let lt = ctx.currentTime + 0.1;
-      for (let rep = 0; rep < 150; rep++) {
-        for (const idx of melody) {
-          osc.frequency.setValueAtTime(scale[idx], lt);
-          noteGain.gain.setValueAtTime(0, lt);
-          noteGain.gain.linearRampToValueAtTime(0.3, lt + 0.08);
-          noteGain.gain.linearRampToValueAtTime(0, lt + noteDur * 0.9);
-          lt += noteDur;
-        }
-        lt += 0.4;
-      }
-      sound.node = osc;
+      const notes = melody.map((idx, i) => ({ at: i * noteDur, dur: noteDur * 0.9, wave: "triangle",
+        freq: scale[idx], env: [[0, 0], [0.08, 0.3], [noteDur * 0.9, 0]] }));
+      loopSource(ctx, makeEventBuffer(ctx, melody.length * noteDur + 0.4, notes), sound.gain);
     } else {
-      const src = ctx.createBufferSource();
-      src.buffer = makeNoiseBuffer(ctx, type);
-      src.loop = true;
       const filter = ctx.createBiquadFilter();
       filter.type = "lowpass";
       filter.frequency.value = type === "brown" ? 500 : 4000;
-      src.connect(filter).connect(sound.gain);
-      src.start();
-      sound.node = src;
+      filter.connect(sound.gain);
+      loopSource(ctx, makeNoiseBuffer(ctx, type), filter);
     }
 
     sound.current = type;
@@ -974,9 +1008,8 @@
   }
 
   function stopSound(updateUI = true) {
-    if (sound.node) { try { sound.node.stop(); } catch (e) {} sound.node = null; }
-    sound.extraNodes.forEach((n) => { try { n.stop(); } catch (e) {} });
-    sound.extraNodes = [];
+    sound.sources.forEach((n) => { try { n.stop(); } catch (e) {} });
+    sound.sources = [];
     if (sound.gain) { sound.gain.disconnect(); sound.gain = null; }
     if (sound.timerId) { clearTimeout(sound.timerId); sound.timerId = null; }
     sound.current = null;
@@ -1232,7 +1265,7 @@
       }
       const baby = currentBaby();
       if (editingFeedId) {
-        Object.assign(baby.feedings.find((f) => f.id === editingFeedId), data);
+        baby.feedings = baby.feedings.map((f) => (f.id === editingFeedId ? { id: f.id, ...data } : f));
       } else {
         baby.feedings.push({ id: crypto.randomUUID(), ...data });
       }
