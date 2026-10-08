@@ -40,6 +40,7 @@
           </label>
           <button type="submit" class="btn-primary">Empezar ✨</button>
         </form>
+        <button id="onb-import" class="btn-ghost onb-import" type="button">¿Otro cuidador ya usa Lunara? Importar sus datos</button>
       </div>
     </section>
 
@@ -62,6 +63,7 @@
           <div id="big-timer" class="big-timer">—</div>
           <div id="prediction" class="prediction" aria-live="polite"></div>
           <button id="sleep-toggle" class="btn-sleep"></button>
+          <button id="edit-active" class="btn-ghost btn-small hidden" type="button">✏️ Corregir inicio</button>
         </div>
 
         <h3 class="section-title">Reloj de 24 horas</h3>
@@ -102,7 +104,13 @@
 
       <!-- ESTADÍSTICAS -->
       <section id="view-stats" class="view hidden" role="tabpanel" aria-labelledby="tab-stats">
-        <h3 class="section-title">Últimos 7 días</h3>
+        <div class="row-between">
+          <h3 class="section-title" id="stats-title">Últimos 7 días</h3>
+          <div class="range-toggle" role="group" aria-label="Periodo">
+            <button class="range-btn active" data-range="7" aria-pressed="true">7 d</button>
+            <button class="range-btn" data-range="30" aria-pressed="false">30 d</button>
+          </div>
+        </div>
         <div class="card">
           <div id="chart" class="chart"></div>
           <div class="chart-legend">
@@ -188,6 +196,28 @@
           </form>
         </div>
         <div class="card">
+          <h4>Avisos</h4>
+          <label class="check-row">
+            <input type="checkbox" id="notify-enabled" />
+            Avisarme antes de la siesta y de la hora de dormir
+          </label>
+          <label class="slider-row">Antelación
+            <select id="notify-lead">
+              <option value="5">5 min</option>
+              <option value="10">10 min</option>
+              <option value="15">15 min</option>
+              <option value="30">30 min</option>
+            </select>
+          </label>
+          <p class="muted">Los avisos salen mientras Lunara esté abierta o en segundo plano en este dispositivo.</p>
+        </div>
+        <div class="card share-card">
+          <h4>Compartir con otro cuidador</h4>
+          <p class="muted">Envía tus datos a otra persona para que los importe en su móvil. Al importar se combinan los registros de ambos. No es una sincronización automática: repetid el intercambio cuando queráis poneros al día.</p>
+          <button id="share-data" class="btn-ghost" type="button">📤 Compartir mis datos</button>
+          <button id="import-data" class="btn-ghost" type="button">📥 Importar datos recibidos</button>
+        </div>
+        <div class="card">
           <h4>Ventanas de sueño actuales</h4>
           <p id="prof-windows" class="muted"></p>
         </div>
@@ -226,6 +256,28 @@
           <div class="modal-actions">
             <button type="button" id="sess-delete" class="btn-danger hidden">Eliminar</button>
             <button type="button" id="sess-cancel" class="btn-ghost">Cancelar</button>
+            <button type="submit" class="btn-primary">Guardar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal corregir el sueño en curso -->
+    <div id="active-modal" class="modal hidden">
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="active-modal-title">
+        <h3 id="active-modal-title">Corregir sueño en curso</h3>
+        <form id="active-form">
+          <label>Se durmió a las
+            <input type="datetime-local" id="active-start" required />
+          </label>
+          <label>Tipo
+            <select id="active-type">
+              <option value="nap">Siesta</option>
+              <option value="night">Noche</option>
+            </select>
+          </label>
+          <div class="modal-actions">
+            <button type="button" id="active-cancel" class="btn-ghost">Cancelar</button>
             <button type="submit" class="btn-primary">Guardar</button>
           </div>
         </form>
@@ -293,6 +345,7 @@
     </div>
   </div>
 
+  <input type="file" id="import-file" accept="application/json,.json" hidden />
   <script src="app.js"></script>
 </body>
 </html>

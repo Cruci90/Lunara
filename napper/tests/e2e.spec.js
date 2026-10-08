@@ -653,3 +653,177 @@ test.describe("Robustez", () => {
     }
   });
 });
+
+test.describe("Despertares nocturnos", () => {
+  test("los huecos entre tramos de noche cuentan como despertares", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-06-24T10:00:00"));
+    await onboard(page, { birth: "2026-01-24" });
+    await setSessions(page, [
+      ["2026-06-23T19:30:00", "2026-06-24T01:00:00", "night"],
+      ["2026-06-24T01:20:00", "2026-06-24T03:40:00", "night"],
+      ["2026-06-24T04:00:00", "2026-06-24T06:45:00", "night"],
+    ]);
+    await expect(page.locator("#today-summary")).toContainText("2Despertares");
+
+    await page.click('.tab[data-view="stats"]');
+    const cards = page.locator("#stats-cards");
+    await expect(cards).toContainText("2,0Despertares por noche");
+    await expect(cards).toContainText("19:30Hora media de acostarse");
+    await expect(cards).toContainText("06:45Hora media de despertar");
+  });
+
+  test("despertarse de noche ofrece volver a dormir y continúa la noche", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-06-24T02:00:00"));
+    await onboard(page, { birth: "2026-01-24" });
+    await setSessions(page, [["2026-06-23T19:30:00", "2026-06-24T01:30:00", "night"]]);
+    await expect(page.locator("#status-label")).toContainText("se ha despertado esta noche");
+    await expect(page.locator("#sleep-toggle")).toContainText("Volver a dormir");
+    await page.click("#sleep-toggle");
+    await expect(page.locator("#prediction")).toContainText("Noche desde las 02:00");
+  });
+
+  test("volver a dormir poco después de despertar temprano sigue siendo noche", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-06-24T06:20:00"));
+    await onboard(page, { birth: "2026-01-24" });
+    await setSessions(page, [["2026-06-23T19:30:00", "2026-06-24T06:00:00", "night"]]);
+    await page.click("#sleep-toggle");
+    await expect(page.locator("#prediction")).toContainText("Noche desde las 06:20");
+  });
+});
+
+test.describe("Corregir el sueño en curso", () => {
+  test("se puede cambiar la hora de inicio", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-06-24T10:00:00"));
+    await onboard(page, { birth: "2026-01-24" });
+    await expect(page.locator("#edit-active")).toBeHidden();
+    await page.click("#sleep-toggle");
+    await page.click("#edit-active");
+    await page.fill("#active-start", "2026-06-24T09:15");
+    await page.click("#active-form button[type=submit]");
+    await expect(page.locator("#big-timer")).toHaveText("45:00");
+    await expect(page.locator("#prediction")).toContainText("Siesta desde las 09:15");
+
+    await page.click("#sleep-toggle");
+    await page.click('.tab[data-view="log"]');
+    await expect(page.locator(".log-item")).toContainText("09:15 – 10:00");
+  });
+
+  test("rechaza una hora de inicio futura", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-06-24T10:00:00"));
+    await onboard(page, { birth: "2026-01-24" });
+    await page.click("#sleep-toggle");
+    await page.click("#edit-active");
+    await page.$eval("#active-start", (el) => { el.removeAttribute("max"); el.value = "2026-06-24T11:00"; });
+    page.once("dialog", (d) => d.accept());
+    await page.click("#active-form button[type=submit]");
+    await expect(page.locator("#active-modal")).toBeVisible();
+  });
+});
+
+test.describe("Estadísticas de 30 días", () => {
+  test("el selector cambia a 30 columnas", async ({ page }) => {
+    await onboard(page);
+    await page.click('.tab[data-view="stats"]');
+    await page.click('.range-btn[data-range="30"]');
+    await expect(page.locator(".chart-col")).toHaveCount(30);
+    await expect(page.locator("#stats-title")).toHaveText("Últimos 30 días");
+    await page.click('.range-btn[data-range="7"]');
+    await expect(page.locator(".chart-col")).toHaveCount(7);
+  });
+});
+
+test.describe("Avisos", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      window.__notes = [];
+      window.Notification = class {
+        constructor(title, opts) { window.__notes.push({ title, ...opts }); }
+        static get permission() { return "granted"; }
+        static requestPermission() { return Promise.resolve("granted"); }
+      };
+      ServiceWorkerRegistration.prototype.showNotification = function (title, opts) {
+        window.__notes.push({ title, ...opts });
+        return Promise.resolve();
+      };
+    });
+  });
+
+  test("avisa antes de la ventana de siesta una sola vez", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-06-24T08:52:00"));
+    await onboard(page, { wake: "07:30", birth: "2026-01-24" }); // ventana desde las 09:00
+    await page.click('.tab[data-view="profile"]');
+    await page.check("#notify-enabled");
+    await page.waitForFunction(() => window.__notes.length > 0);
+    const notes = await page.evaluate(() => window.__notes);
+    expect(notes).toHaveLength(1);
+    expect(notes[0].title).toBe("Siesta de Vega");
+    expect(notes[0].body).toContain("09:00");
+
+    await page.reload();
+    await page.waitForTimeout(1500);
+    expect(await page.evaluate(() => window.__notes.length)).toBe(0);
+  });
+
+  test("sin activar los avisos no se muestra nada", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-06-24T08:52:00"));
+    await onboard(page, { wake: "07:30", birth: "2026-01-24" });
+    await page.waitForTimeout(1500);
+    expect(await page.evaluate(() => window.__notes.length)).toBe(0);
+  });
+});
+
+test.describe("Compartir con otro cuidador", () => {
+  async function exportedState(page) {
+    return page.evaluate(() => JSON.parse(localStorage.getItem("lunara_state_v1")));
+  }
+
+  test("importar combina registros del mismo bebé y añade bebés nuevos", async ({ page }) => {
+    await onboard(page, { name: "Vega" });
+    await page.click('.tab[data-view="log"]');
+    await page.click("#add-session");
+    await page.click("#session-form button[type=submit]");
+
+    const state = await exportedState(page);
+    const vega = state.babies[0];
+    vega.sessions.push({ id: "otro-cuidador", start: "2026-06-20T09:00:00.000Z", end: "2026-06-20T10:00:00.000Z", type: "nap" });
+    state.babies.push({ id: "nova-id", name: "Nova", birth: "2026-05-01", wakeTime: "08:00", sessions: [], feedings: [], diapers: [] });
+
+    let message = "";
+    page.once("dialog", (d) => { message = d.message(); d.accept(); });
+    await page.setInputFiles("#import-file", {
+      name: "lunara-datos.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(state)),
+    });
+    await expect.poll(() => message).toContain("1 bebé(s) nuevo(s) y 1 registro(s) nuevo(s)");
+    await expect(page.locator(".log-item")).toHaveCount(2);
+    await page.click('.tab[data-view="profile"]');
+    await expect(page.locator(".baby-row")).toHaveCount(2);
+  });
+
+  test("un segundo cuidador puede empezar importando los datos", async ({ page, browser }) => {
+    await onboard(page, { name: "Vega" });
+    const state = await exportedState(page);
+
+    const other = await browser.newPage();
+    await other.goto("/index.html");
+    other.once("dialog", (d) => d.accept());
+    await other.click("#onb-import");
+    await other.setInputFiles("#import-file", {
+      name: "lunara-datos.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(state)),
+    });
+    await expect(other.locator("#main")).toBeVisible();
+    await expect(other.locator("#baby-name")).toHaveText("Vega");
+    await other.close();
+  });
+
+  test("rechaza un archivo que no es de Lunara", async ({ page }) => {
+    await onboard(page);
+    let message = "";
+    page.once("dialog", (d) => { message = d.message(); d.accept(); });
+    await page.setInputFiles("#import-file", {
+      name: "otro.json", mimeType: "application/json", buffer: Buffer.from('{"babies":[{"name":1}]}'),
+    });
+    await expect.poll(() => message).toContain("no es una copia de datos de Lunara válida");
+    await page.click('.tab[data-view="profile"]');
+    await expect(page.locator(".baby-row")).toHaveCount(1);
+  });
+});

@@ -53,6 +53,8 @@
   const defaultState = () => ({
     babies: [],
     activeBabyId: null,
+    settings: { notify: false, notifyLead: 10 },
+    notified: [],
   });
 
   function newBaby({ name, birth, wakeTime, bedTime = "20:00" }) {
@@ -72,26 +74,70 @@
 
   let state = load();
 
+  function normalizeState(parsed) {
+    if (parsed.baby && !parsed.babies) {
+      // Migración desde el formato de un solo bebé.
+      const baby = normalizeBaby({
+        id: crypto.randomUUID(),
+        ...parsed.baby,
+        sessions: parsed.sessions || [],
+        activeSleep: parsed.activeSleep || null,
+      });
+      parsed = { babies: [baby], activeBabyId: baby.id };
+    }
+    const base = defaultState();
+    const result = Object.assign(base, parsed);
+    result.babies = (result.babies || []).map(normalizeBaby);
+    result.settings = { ...base.settings, ...(parsed.settings || {}) };
+    result.notified = Array.isArray(parsed.notified) ? parsed.notified : [];
+    return result;
+  }
+
   function load() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return defaultState();
-      const parsed = JSON.parse(raw);
-      if (parsed.baby && !parsed.babies) {
-        // Migración desde el formato de un solo bebé.
-        const baby = normalizeBaby({
-          id: crypto.randomUUID(),
-          ...parsed.baby,
-          sessions: parsed.sessions || [],
-          activeSleep: parsed.activeSleep || null,
-        });
-        return { babies: [baby], activeBabyId: baby.id };
-      }
-      const result = Object.assign(defaultState(), parsed);
-      result.babies = (result.babies || []).map(normalizeBaby);
-      return result;
+      if (raw) return normalizeState(JSON.parse(raw));
     } catch (e) { /* estado corrupto: empezar de cero */ }
     return defaultState();
+  }
+
+  // ---------- Compartir con otro cuidador (importar y combinar) ----------
+  // No hay servidor: los cuidadores se intercambian el archivo exportado y al
+  // importarlo se combinan los registros por id. Los borrados no se propagan.
+  const REQUIRED_FIELDS = { sessions: ["start", "end"], feedings: ["time"], diapers: ["time"] };
+
+  function parseImport(text) {
+    const incoming = normalizeState(JSON.parse(text));
+    const valid = incoming.babies.length && incoming.babies.every((b) =>
+      typeof b.id === "string" && typeof b.name === "string" && typeof b.birth === "string"
+      && typeof b.wakeTime === "string"
+      && Object.entries(REQUIRED_FIELDS).every(([k, fields]) => Array.isArray(b[k])
+        && b[k].every((x) => x && typeof x.id === "string" && fields.every((f) => !isNaN(new Date(x[f]))))));
+    if (!valid) throw new Error("formato no válido");
+    return incoming;
+  }
+
+  function mergeImported(incoming) {
+    const added = { babies: 0, records: 0 };
+    for (const inc of incoming.babies) {
+      const local = state.babies.find((b) => b.id === inc.id);
+      if (!local) {
+        state.babies.push(inc);
+        added.babies++;
+        continue;
+      }
+      for (const key of ["sessions", "feedings", "diapers"]) {
+        const byId = new Map(local[key].map((x) => [x.id, x]));
+        for (const item of inc[key]) {
+          if (!byId.has(item.id)) added.records++;
+          byId.set(item.id, item);
+        }
+        local[key] = Array.from(byId.values());
+      }
+      if (!local.activeSleep && inc.activeSleep) local.activeSleep = inc.activeSleep;
+    }
+    if (!currentBaby()) state.activeBabyId = state.babies[0].id;
+    return added;
   }
 
   function save() {
@@ -298,6 +344,67 @@
     return h >= 18 || h < 6 ? "night" : "nap";
   }
 
+  // ---------- Noches y despertares nocturnos ----------
+  // Una noche son los tramos de tipo «noche» separados por menos de
+  // NIGHT_GAP_MAX_MIN; cada hueco entre tramos es un despertar nocturno.
+  const NIGHT_GAP_MAX_MIN = 180;
+
+  function groupNights(sessions) {
+    const parts = sessions
+      .filter((s) => s.type === "night")
+      .map((s) => ({ start: new Date(s.start), end: new Date(s.end) }))
+      .sort((a, b) => a.start - b.start);
+    const nights = [];
+    for (const p of parts) {
+      const last = nights[nights.length - 1];
+      if (last && (p.start - last.end) / 60000 <= NIGHT_GAP_MAX_MIN) {
+        last.wakings++;
+        last.awakeMin += Math.max(0, (p.start - last.end) / 60000);
+        if (p.end > last.end) last.end = p.end;
+      } else {
+        nights.push({ start: p.start, end: p.end, wakings: 0, awakeMin: 0 });
+      }
+    }
+    return nights;
+  }
+
+  // Noche que terminó hoy (la de anoche), o null si no se registró.
+  function lastNight() {
+    const now = new Date();
+    return groupNights(currentBaby().sessions)
+      .filter((n) => isSameDay(n.end, now) && n.end <= now)
+      .pop() || null;
+  }
+
+  function lastFinishedSession() {
+    const now = new Date();
+    return currentBaby().sessions
+      .filter((s) => new Date(s.end) <= now)
+      .sort((a, b) => new Date(b.end) - new Date(a.end))[0] || null;
+  }
+
+  // Despierto/a en mitad de la noche: el último tramo fue de noche, acabó hace
+  // poco y todavía es hora de noche.
+  function inNightWaking() {
+    const baby = currentBaby();
+    if (baby.activeSleep) return false;
+    const last = lastFinishedSession();
+    if (!last || last.type !== "night") return false;
+    const now = new Date();
+    return (now - new Date(last.end)) / 60000 <= NIGHT_GAP_MAX_MIN && suggestType(now) === "night";
+  }
+
+  function typeForNewSleep(start) {
+    const last = lastFinishedSession();
+    const continuesNight = last && last.type === "night"
+      && (start - new Date(last.end)) / 60000 <= NIGHT_GAP_MAX_MIN && start.getHours() < 9;
+    return continuesNight ? "night" : suggestType(start);
+  }
+
+  function activeSleepType(baby) {
+    return baby.activeSleep.type || suggestType(new Date(baby.activeSleep.start));
+  }
+
   // ---------- Tomas y pañales ----------
   function sortedFeedings() {
     return [...currentBaby().feedings].sort((a, b) => new Date(b.time) - new Date(a.time));
@@ -380,8 +487,19 @@
       timer.textContent = fmtTimer(secs);
       btn.textContent = "Despertar ☀️";
       btn.classList.add("sleeping");
-      pred.textContent = `Desde las ${fmtTime(new Date(baby.activeSleep.start))}`;
+      const kind = activeSleepType(baby) === "night" ? "Noche" : "Siesta";
+      pred.textContent = `${kind} desde las ${fmtTime(new Date(baby.activeSleep.start))}`;
+      $("#edit-active").classList.remove("hidden");
+    } else if (inNightWaking()) {
+      const wake = lastWakeTime();
+      timer.textContent = fmtTimer(Math.max(0, Math.floor((now - wake) / 1000)));
+      status.textContent = `${baby.name} se ha despertado esta noche 🌜`;
+      btn.textContent = "Volver a dormir 🌙";
+      btn.classList.remove("sleeping");
+      pred.textContent = `Despertar nocturno desde las ${fmtTime(wake)} · cuenta dentro de la noche`;
+      $("#edit-active").classList.add("hidden");
     } else {
+      $("#edit-active").classList.add("hidden");
       const wake = lastWakeTime();
       const awakeSecs = Math.floor((now - wake) / 1000);
       status.textContent = `${baby.name} está despierto/a`;
@@ -437,7 +555,7 @@
     }
 
     const active = baby.activeSleep && new Date(baby.activeSleep.start);
-    if (active && suggestType(active) === "nap" && active >= wake) {
+    if (active && activeSleepType(baby) === "nap" && active >= wake) {
       n++;
       const end = new Date(Math.max(active.getTime() + win.napAvg * 60000, now.getTime()));
       items.push({
@@ -543,7 +661,7 @@
       const a = new Date(baby.activeSleep.start);
       const from = a < day ? day : a;
       const to = new Date();
-      if (to > from) segments.push({ start: from, end: to, type: suggestType(a), active: true });
+      if (to > from) segments.push({ start: from, end: to, type: activeSleepType(baby), active: true });
     }
     return segments;
   }
@@ -604,13 +722,15 @@
     const activeSleep = currentBaby().activeSleep;
     if (activeSleep) {
       const mins = (Date.now() - new Date(activeSleep.start)) / 60000;
-      const t = suggestType(new Date(activeSleep.start));
+      const t = activeSleepType(currentBaby());
       if (t === "nap") nap += mins; else night += mins;
     }
+    const night0 = lastNight();
     $("#today-summary").innerHTML = `
       <div><div class="num">${fmtDur(nap + night)}</div><div class="lbl">Total</div></div>
       <div><div class="num">${napsCount}</div><div class="lbl">Siestas</div></div>
-      <div><div class="num">${fmtDur(night)}</div><div class="lbl">Noche</div></div>`;
+      <div><div class="num">${fmtDur(night)}</div><div class="lbl">Noche</div></div>
+      <div><div class="num">${night0 ? night0.wakings : "—"}</div><div class="lbl">Despertares</div></div>`;
   }
 
   function renderCareSummary() {
@@ -749,9 +869,23 @@
   }
 
   // ---------- Render: estadísticas ----------
+  let statsRange = 7;
+
+  // Media de horas del día; con wrapAt se tratan como «después de medianoche»
+  // las horas anteriores a ese minuto (p. ej. acostarse a las 00:30).
+  function avgClockTime(dates, wrapAt = 0) {
+    if (!dates.length) return "—";
+    const mins = dates.map((d) => {
+      const m = d.getHours() * 60 + d.getMinutes();
+      return m < wrapAt ? m + 1440 : m;
+    });
+    const avg = Math.round(mins.reduce((a, m) => a + m, 0) / mins.length) % 1440;
+    return `${pad(Math.floor(avg / 60))}:${pad(avg % 60)}`;
+  }
+
   function renderStats() {
     const days = [];
-    for (let i = 6; i >= 0; i--) {
+    for (let i = statsRange - 1; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
       days.push(d);
@@ -765,18 +899,22 @@
       return { d, nap, night, total: nap + night };
     });
     const maxTotal = Math.max(60, ...data.map((x) => x.total));
+    const compact = statsRange > 7;
 
+    $("#stats-title").textContent = `Últimos ${statsRange} días`;
+    $("#chart").classList.toggle("chart-compact", compact);
     $("#chart").innerHTML = data
-      .map((x) => {
+      .map((x, i) => {
         const napH = Math.round((x.nap / maxTotal) * 120);
         const nightH = Math.round((x.night / maxTotal) * 120);
-        return `<div class="chart-col">
-          <div class="chart-val">${x.total ? (x.total / 60).toFixed(1) : ""}</div>
+        const label = compact ? ((data.length - 1 - i) % 5 === 0 ? x.d.getDate() : "") : dayNames[x.d.getDay()];
+        return `<div class="chart-col" title="${x.d.getDate()}/${x.d.getMonth() + 1}: ${fmtDur(x.total)}">
+          <div class="chart-val">${!compact && x.total ? (x.total / 60).toFixed(1) : ""}</div>
           <div class="chart-bars">
             <div class="bar-night" style="height:${nightH}px"></div>
             <div class="bar-nap" style="height:${napH}px"></div>
           </div>
-          <div class="chart-label">${dayNames[x.d.getDay()]}</div>
+          <div class="chart-label">${label}</div>
         </div>`;
       })
       .join("");
@@ -784,15 +922,24 @@
     const withData = data.filter((x) => x.total > 0);
     const avgTotal = withData.length ? withData.reduce((a, x) => a + x.total, 0) / withData.length : 0;
     const avgNight = withData.length ? withData.reduce((a, x) => a + x.night, 0) / withData.length : 0;
-    const napsLast7 = days.reduce(
+    const naps = days.reduce(
       (acc, d) => acc + sessionsOverlappingDay(d).filter(([s]) => s.type === "nap").length, 0);
     const longest = currentBaby().sessions.reduce(
       (acc, s) => Math.max(acc, (new Date(s.end) - new Date(s.start)) / 60000), 0);
 
+    const rangeStart = new Date(days[0]); rangeStart.setHours(0, 0, 0, 0);
+    const nights = groupNights(currentBaby().sessions).filter((n) => n.end >= rangeStart && n.end <= new Date());
+    const avgWakings = nights.length
+      ? (nights.reduce((a, n) => a + n.wakings, 0) / nights.length).toFixed(1).replace(".", ",")
+      : "—";
+
     $("#stats-cards").innerHTML = `
-      <div class="stat-card"><div class="num">${fmtDur(avgTotal)}</div><div class="lbl">Media diaria (7 d)</div></div>
+      <div class="stat-card"><div class="num">${fmtDur(avgTotal)}</div><div class="lbl">Media diaria</div></div>
       <div class="stat-card"><div class="num">${fmtDur(avgNight)}</div><div class="lbl">Media nocturna</div></div>
-      <div class="stat-card"><div class="num">${napsLast7}</div><div class="lbl">Siestas (7 d)</div></div>
+      <div class="stat-card"><div class="num">${naps}</div><div class="lbl">Siestas (${statsRange} d)</div></div>
+      <div class="stat-card"><div class="num">${avgWakings}</div><div class="lbl">Despertares por noche</div></div>
+      <div class="stat-card"><div class="num">${avgClockTime(nights.map((n) => n.start), 12 * 60)}</div><div class="lbl">Hora media de acostarse</div></div>
+      <div class="stat-card"><div class="num">${avgClockTime(nights.map((n) => n.end))}</div><div class="lbl">Hora media de despertar</div></div>
       <div class="stat-card"><div class="num">${fmtDur(longest)}</div><div class="lbl">Tramo más largo</div></div>`;
   }
 
@@ -811,6 +958,7 @@
       `Ventana de vigilia ${fmtDur(w.min)} – ${fmtDur(w.max)}, ` +
       `${w.naps} siesta${w.naps === 1 ? "" : "s"} al día aprox. (${source}, edad: ${ageLabel()})`;
     renderBabyList();
+    renderNotifySettings();
   }
 
   function renderBabyList() {
@@ -1029,6 +1177,86 @@
     else st.textContent = "Reproduciendo";
   }
 
+  // ---------- Avisos de siesta y hora de dormir ----------
+  // Sin servidor de push: los avisos salen mientras la app esté abierta o en
+  // segundo plano en este dispositivo, y solo para el bebé activo.
+  const REMINDER_GRACE_MS = 15 * 60000;
+
+  function upcomingReminders() {
+    const baby = currentBaby();
+    if (baby.activeSleep) return [];
+    const now = new Date();
+    const lead = state.settings.notifyLead * 60000;
+    const bed = timeAt(now, baby.bedTime || "20:00");
+    const out = [];
+    if (!inNightWaking() && suggestType(now) === "nap") {
+      const wake = lastWakeTime();
+      const from = new Date(wake.getTime() + windowsForAge().min * 60000);
+      if (wake <= now && from < bed) {
+        out.push({
+          key: `nap-${baby.id}-${wake.toISOString()}`,
+          at: from.getTime() - lead,
+          title: `Siesta de ${baby.name}`,
+          body: `La ventana de sueño empieza a las ${fmtTime(from)}.`,
+        });
+      }
+    }
+    out.push({
+      key: `bed-${baby.id}-${dayKey(now)}`,
+      at: bed.getTime() - lead,
+      title: `Hora de dormir de ${baby.name}`,
+      body: `A dormir a las ${fmtTime(bed)}.`,
+    });
+    return out;
+  }
+
+  function showReminder({ title, body, key }) {
+    const opts = { body, tag: key, icon: "icon-192.png" };
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.ready
+        .then((reg) => reg.showNotification(title, opts))
+        .catch(() => new Notification(title, opts));
+    } else {
+      new Notification(title, opts);
+    }
+  }
+
+  function checkReminders() {
+    if (!state.settings.notify || !("Notification" in window) || Notification.permission !== "granted") return;
+    const now = Date.now();
+    for (const r of upcomingReminders()) {
+      // Pasado el margen no se avisa, para no lanzar avisos atrasados al abrir la app.
+      if (now < r.at || now > r.at + REMINDER_GRACE_MS || state.notified.includes(r.key)) continue;
+      state.notified = [...state.notified, r.key].slice(-30);
+      save();
+      showReminder(r);
+    }
+  }
+
+  async function setNotify(enabled) {
+    if (enabled) {
+      if (!("Notification" in window)) {
+        alert("Este navegador no permite mostrar avisos.");
+        enabled = false;
+      } else if (Notification.permission !== "granted") {
+        const permission = await Notification.requestPermission();
+        if (permission !== "granted") {
+          alert("Sin permiso del navegador no se pueden mostrar avisos.");
+          enabled = false;
+        }
+      }
+    }
+    state.settings.notify = enabled;
+    save();
+    renderNotifySettings();
+  }
+
+  function renderNotifySettings() {
+    $("#notify-enabled").checked = state.settings.notify;
+    $("#notify-lead").value = String(state.settings.notifyLead);
+    $("#notify-lead").disabled = !state.settings.notify;
+  }
+
   // ---------- Modal de sesión ----------
   let editingId = null;
   let modalTrigger = null;
@@ -1063,6 +1291,23 @@
   function closeModal() {
     $("#modal").classList.add("hidden");
     editingId = null;
+    if (modalTrigger) { modalTrigger.focus(); modalTrigger = null; }
+  }
+
+  // ---------- Modal de sueño en curso ----------
+  function openActiveModal() {
+    const baby = currentBaby();
+    if (!baby.activeSleep) return;
+    modalTrigger = document.activeElement;
+    $("#active-start").value = toLocalInput(new Date(baby.activeSleep.start));
+    $("#active-start").max = toLocalInput(new Date());
+    $("#active-type").value = activeSleepType(baby);
+    $("#active-modal").classList.remove("hidden");
+    $("#active-start").focus();
+  }
+
+  function closeActiveModal() {
+    $("#active-modal").classList.add("hidden");
     if (modalTrigger) { modalTrigger.focus(); modalTrigger = null; }
   }
 
@@ -1177,6 +1422,7 @@
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
       if (!$("#modal").classList.contains("hidden")) closeModal();
+      else if (!$("#active-modal").classList.contains("hidden")) closeActiveModal();
       else if (!$("#feed-modal").classList.contains("hidden")) closeFeedModal();
       else if (!$("#diaper-modal").classList.contains("hidden")) closeDiaperModal();
     });
@@ -1208,14 +1454,32 @@
             id: crypto.randomUUID(),
             start: start.toISOString(),
             end: end.toISOString(),
-            type: suggestType(start),
+            type: activeSleepType(baby),
           });
         }
         baby.activeSleep = null;
       } else {
-        baby.activeSleep = { start: new Date().toISOString() };
+        const start = new Date();
+        baby.activeSleep = { start: start.toISOString(), type: typeForNewSleep(start) };
       }
       save();
+      renderAll();
+    });
+
+    // Corregir el sueño en curso
+    $("#edit-active").addEventListener("click", openActiveModal);
+    $("#active-cancel").addEventListener("click", closeActiveModal);
+    $("#active-modal").addEventListener("click", (e) => {
+      if (e.target.id === "active-modal") closeActiveModal();
+    });
+    $("#active-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const baby = currentBaby();
+      const start = new Date($("#active-start").value);
+      if (!(start <= new Date())) { alert("La hora de inicio no puede ser futura."); return; }
+      baby.activeSleep = { start: start.toISOString(), type: $("#active-type").value };
+      save();
+      closeActiveModal();
       renderAll();
     });
 
@@ -1240,6 +1504,19 @@
           b.setAttribute("aria-selected", String(active));
         });
         renderLog();
+      })
+    );
+
+    // Rango de estadísticas
+    $$(".range-btn").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        statsRange = Number(btn.dataset.range);
+        $$(".range-btn").forEach((b) => {
+          const active = b === btn;
+          b.classList.toggle("active", active);
+          b.setAttribute("aria-pressed", String(active));
+        });
+        renderStats();
       })
     );
 
@@ -1386,13 +1663,56 @@
       renderAll();
     });
 
-    $("#export-data").addEventListener("click", () => {
-      const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+    // Avisos
+    $("#notify-enabled").addEventListener("change", (e) => setNotify(e.target.checked));
+    $("#notify-lead").addEventListener("change", (e) => {
+      state.settings.notifyLead = Number(e.target.value);
+      save();
+    });
+
+    // Exportar, compartir e importar
+    const exportJson = () => JSON.stringify({ babies: state.babies, activeBabyId: state.activeBabyId }, null, 2);
+    const downloadJson = (json) => {
+      const blob = new Blob([json], { type: "application/json" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = "lunara-datos.json";
       a.click();
       URL.revokeObjectURL(a.href);
+    };
+    $("#export-data").addEventListener("click", () => downloadJson(exportJson()));
+    $("#share-data").addEventListener("click", async () => {
+      const json = exportJson();
+      const file = new File([json], "lunara-datos.json", { type: "application/json" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file], title: "Datos de Lunara" });
+          return;
+        } catch (err) {
+          if (err.name === "AbortError") return;
+        }
+      }
+      downloadJson(json);
+    });
+    $("#import-data").addEventListener("click", () => $("#import-file").click());
+    $("#onb-import").addEventListener("click", () => $("#import-file").click());
+    $("#import-file").addEventListener("change", async (e) => {
+      const file = e.target.files[0];
+      e.target.value = "";
+      if (!file) return;
+      let incoming;
+      try {
+        incoming = parseImport(await file.text());
+      } catch (err) {
+        alert("El archivo no es una copia de datos de Lunara válida.");
+        return;
+      }
+      const added = mergeImported(incoming);
+      save();
+      $("#onboarding").classList.add("hidden");
+      $("#main").classList.remove("hidden");
+      renderAll();
+      alert(`Datos importados: ${added.babies} bebé(s) nuevo(s) y ${added.records} registro(s) nuevo(s).`);
     });
     $("#reset-data").addEventListener("click", () => {
       if (!confirm("Esto borrará todos los bebés y sus registros de este dispositivo. ¿Continuar?")) return;
@@ -1409,6 +1729,7 @@
     if (currentBaby()) {
       renderSleepCard();
       renderTodaySummary();
+      checkReminders();
     }
   }
 
