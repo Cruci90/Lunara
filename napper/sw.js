@@ -1,4 +1,4 @@
-const CACHE_NAME = "lunara-cache-v2";
+const CACHE_NAME = "lunara-cache-v4";
 const PRECACHE_URLS = [
   "./",
   "./index.html",
@@ -39,6 +39,16 @@ self.addEventListener("fetch", (event) => {
         })
         .catch(() => cached);
       return cached || network;
+    })
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      const client = clients[0];
+      return client ? client.focus() : self.clients.openWindow("./index.html");
     })
   );
 });

@@ -53,6 +53,8 @@
   const defaultState = () => ({
     babies: [],
     activeBabyId: null,
+    settings: { notify: false, notifyLead: 10 },
+    notified: [],
   });
 
   function newBaby({ name, birth, wakeTime, bedTime = "20:00" }) {
@@ -72,26 +74,70 @@
 
   let state = load();
 
+  function normalizeState(parsed) {
+    if (parsed.baby && !parsed.babies) {
+      // Migración desde el formato de un solo bebé.
+      const baby = normalizeBaby({
+        id: crypto.randomUUID(),
+        ...parsed.baby,
+        sessions: parsed.sessions || [],
+        activeSleep: parsed.activeSleep || null,
+      });
+      parsed = { babies: [baby], activeBabyId: baby.id };
+    }
+    const base = defaultState();
+    const result = Object.assign(base, parsed);
+    result.babies = (result.babies || []).map(normalizeBaby);
+    result.settings = { ...base.settings, ...(parsed.settings || {}) };
+    result.notified = Array.isArray(parsed.notified) ? parsed.notified : [];
+    return result;
+  }
+
   function load() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return defaultState();
-      const parsed = JSON.parse(raw);
-      if (parsed.baby && !parsed.babies) {
-        // Migración desde el formato de un solo bebé.
-        const baby = normalizeBaby({
-          id: crypto.randomUUID(),
-          ...parsed.baby,
-          sessions: parsed.sessions || [],
-          activeSleep: parsed.activeSleep || null,
-        });
-        return { babies: [baby], activeBabyId: baby.id };
-      }
-      const result = Object.assign(defaultState(), parsed);
-      result.babies = (result.babies || []).map(normalizeBaby);
-      return result;
+      if (raw) return normalizeState(JSON.parse(raw));
     } catch (e) { /* estado corrupto: empezar de cero */ }
     return defaultState();
+  }
+
+  // ---------- Compartir con otro cuidador (importar y combinar) ----------
+  // No hay servidor: los cuidadores se intercambian el archivo exportado y al
+  // importarlo se combinan los registros por id. Los borrados no se propagan.
+  const REQUIRED_FIELDS = { sessions: ["start", "end"], feedings: ["time"], diapers: ["time"] };
+
+  function parseImport(text) {
+    const incoming = normalizeState(JSON.parse(text));
+    const valid = incoming.babies.length && incoming.babies.every((b) =>
+      typeof b.id === "string" && typeof b.name === "string" && typeof b.birth === "string"
+      && typeof b.wakeTime === "string"
+      && Object.entries(REQUIRED_FIELDS).every(([k, fields]) => Array.isArray(b[k])
+        && b[k].every((x) => x && typeof x.id === "string" && fields.every((f) => !isNaN(new Date(x[f]))))));
+    if (!valid) throw new Error("formato no válido");
+    return incoming;
+  }
+
+  function mergeImported(incoming) {
+    const added = { babies: 0, records: 0 };
+    for (const inc of incoming.babies) {
+      const local = state.babies.find((b) => b.id === inc.id);
+      if (!local) {
+        state.babies.push(inc);
+        added.babies++;
+        continue;
+      }
+      for (const key of ["sessions", "feedings", "diapers"]) {
+        const byId = new Map(local[key].map((x) => [x.id, x]));
+        for (const item of inc[key]) {
+          if (!byId.has(item.id)) added.records++;
+          byId.set(item.id, item);
+        }
+        local[key] = Array.from(byId.values());
+      }
+      if (!local.activeSleep && inc.activeSleep) local.activeSleep = inc.activeSleep;
+    }
+    if (!currentBaby()) state.activeBabyId = state.babies[0].id;
+    return added;
   }
 
   function save() {
@@ -117,6 +163,8 @@
     const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
     return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
   };
+  const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   const dayKey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const toLocalInput = (d) =>
     `${dayKey(d)}T${fmtTime(d)}`;
@@ -264,19 +312,97 @@
     return out;
   }
 
+  const HOUR_MS = 3600e3;
+
   function lastWakeTime() {
-    // Fin de la última sesión terminada; si no hay, hora habitual de despertar de hoy.
-    const done = sortedSessions().filter((s) => s.end);
-    if (done.length) {
-      const lastEnd = new Date(done[0].end);
-      if (lastEnd <= new Date()) return lastEnd;
-    }
-    return timeAt(new Date(), currentBaby().wakeTime);
+    const now = new Date();
+    const ends = currentBaby().sessions.map((s) => new Date(s.end)).filter((d) => d <= now);
+    const lastEnd = ends.length ? new Date(Math.max(...ends)) : null;
+    const todayWake = timeAt(now, currentBaby().wakeTime);
+    // Un registro de hoy manda, incluida una noche que acaba antes de la hora habitual.
+    if (lastEnd && lastEnd > todayWake - 6 * HOUR_MS) return lastEnd;
+    // Si la noche no se registró, se asume la hora habitual de despertar.
+    if (todayWake <= now) return todayWake;
+    // De madrugada solo cuenta un registro reciente (p. ej. un despertar nocturno).
+    return lastEnd && now - lastEnd < 4 * HOUR_MS ? lastEnd : todayWake;
+  }
+
+  // Hora real de despertar de hoy: fin de la última noche registrada que acaba
+  // hoy antes del mediodía; si no hay, la hora habitual del perfil.
+  function morningWakeTime() {
+    const now = new Date();
+    const noon = timeAt(now, "12:00");
+    const ends = currentBaby().sessions
+      .filter((s) => s.type === "night")
+      .map((s) => new Date(s.end))
+      .filter((d) => isSameDay(d, now) && d < noon && d <= now);
+    return ends.length ? new Date(Math.max(...ends)) : timeAt(now, currentBaby().wakeTime);
   }
 
   function suggestType(start) {
     const h = start.getHours();
     return h >= 18 || h < 6 ? "night" : "nap";
+  }
+
+  // ---------- Noches y despertares nocturnos ----------
+  // Una noche son los tramos de tipo «noche» separados por menos de
+  // NIGHT_GAP_MAX_MIN; cada hueco entre tramos es un despertar nocturno.
+  const NIGHT_GAP_MAX_MIN = 180;
+
+  function groupNights(sessions) {
+    const parts = sessions
+      .filter((s) => s.type === "night")
+      .map((s) => ({ start: new Date(s.start), end: new Date(s.end) }))
+      .sort((a, b) => a.start - b.start);
+    const nights = [];
+    for (const p of parts) {
+      const last = nights[nights.length - 1];
+      if (last && (p.start - last.end) / 60000 <= NIGHT_GAP_MAX_MIN) {
+        last.wakings++;
+        last.awakeMin += Math.max(0, (p.start - last.end) / 60000);
+        if (p.end > last.end) last.end = p.end;
+      } else {
+        nights.push({ start: p.start, end: p.end, wakings: 0, awakeMin: 0 });
+      }
+    }
+    return nights;
+  }
+
+  // Noche que terminó hoy (la de anoche), o null si no se registró.
+  function lastNight() {
+    const now = new Date();
+    return groupNights(currentBaby().sessions)
+      .filter((n) => isSameDay(n.end, now) && n.end <= now)
+      .pop() || null;
+  }
+
+  function lastFinishedSession() {
+    const now = new Date();
+    return currentBaby().sessions
+      .filter((s) => new Date(s.end) <= now)
+      .sort((a, b) => new Date(b.end) - new Date(a.end))[0] || null;
+  }
+
+  // Despierto/a en mitad de la noche: el último tramo fue de noche, acabó hace
+  // poco y todavía es hora de noche.
+  function inNightWaking() {
+    const baby = currentBaby();
+    if (baby.activeSleep) return false;
+    const last = lastFinishedSession();
+    if (!last || last.type !== "night") return false;
+    const now = new Date();
+    return (now - new Date(last.end)) / 60000 <= NIGHT_GAP_MAX_MIN && suggestType(now) === "night";
+  }
+
+  function typeForNewSleep(start) {
+    const last = lastFinishedSession();
+    const continuesNight = last && last.type === "night"
+      && (start - new Date(last.end)) / 60000 <= NIGHT_GAP_MAX_MIN && start.getHours() < 9;
+    return continuesNight ? "night" : suggestType(start);
+  }
+
+  function activeSleepType(baby) {
+    return baby.activeSleep.type || suggestType(new Date(baby.activeSleep.start));
   }
 
   // ---------- Tomas y pañales ----------
@@ -343,7 +469,7 @@
     }
     el.classList.remove("hidden");
     el.innerHTML = `🔄 <strong>Posible transición de siestas</strong><br/>
-      En los últimos días, ${currentBaby().name} ha hecho ${drop.to} siesta${drop.to === 1 ? "" : "s"}
+      En los últimos días, ${escapeHtml(currentBaby().name)} ha hecho ${drop.to} siesta${drop.to === 1 ? "" : "s"}
       en vez de las ${drop.from} habituales para su edad. Podría estar preparándose para reducir el número de siestas.`;
   }
 
@@ -361,8 +487,19 @@
       timer.textContent = fmtTimer(secs);
       btn.textContent = "Despertar ☀️";
       btn.classList.add("sleeping");
-      pred.textContent = `Desde las ${fmtTime(new Date(baby.activeSleep.start))}`;
+      const kind = activeSleepType(baby) === "night" ? "Noche" : "Siesta";
+      pred.textContent = `${kind} desde las ${fmtTime(new Date(baby.activeSleep.start))}`;
+      $("#edit-active").classList.remove("hidden");
+    } else if (inNightWaking()) {
+      const wake = lastWakeTime();
+      timer.textContent = fmtTimer(Math.max(0, Math.floor((now - wake) / 1000)));
+      status.textContent = `${baby.name} se ha despertado esta noche 🌜`;
+      btn.textContent = "Volver a dormir 🌙";
+      btn.classList.remove("sleeping");
+      pred.textContent = `Despertar nocturno desde las ${fmtTime(wake)} · cuenta dentro de la noche`;
+      $("#edit-active").classList.add("hidden");
     } else {
+      $("#edit-active").classList.add("hidden");
       const wake = lastWakeTime();
       const awakeSecs = Math.floor((now - wake) / 1000);
       status.textContent = `${baby.name} está despierto/a`;
@@ -385,20 +522,63 @@
   }
 
   // ---------- Plan del día (predicción) ----------
+  // Se recalcula con cada registro: parte de la hora real de despertar, muestra
+  // las siestas ya hechas o en curso y prevé solo las que caben antes de dormir.
   function buildScheduleItems() {
     const win = windowsForAge();
+    const baby = currentBaby();
+    const now = new Date();
     const items = [];
 
-    let t = timeAt(new Date(), currentBaby().wakeTime);
-    items.push({ icon: "☀️", time: fmtTime(t), label: "Despertar", at: new Date(t) });
+    const wake = morningWakeTime();
+    items.push({ icon: "☀️", time: fmtTime(wake), label: "Despertar", at: wake });
 
-    for (let i = 1; i <= win.naps; i++) {
+    const doneNaps = baby.sessions
+      .filter((s) => s.type === "nap")
+      .map((s) => ({ id: s.id, start: new Date(s.start), end: new Date(s.end) }))
+      .filter((s) => isSameDay(s.start, now) && s.start >= wake)
+      .sort((a, b) => a.start - b.start);
+
+    let n = 0;
+    let t = wake;
+    for (const s of doneNaps) {
+      n++;
+      items.push({
+        icon: "✅",
+        time: `${fmtTime(s.start)} – ${fmtTime(s.end)}`,
+        label: `Siesta ${n}`,
+        at: s.start,
+        until: s.end,
+        sessionId: s.id,
+      });
+      if (s.end > t) t = s.end;
+    }
+
+    const active = baby.activeSleep && new Date(baby.activeSleep.start);
+    if (active && activeSleepType(baby) === "nap" && active >= wake) {
+      n++;
+      const end = new Date(Math.max(active.getTime() + win.napAvg * 60000, now.getTime()));
+      items.push({
+        icon: "💤",
+        time: `${fmtTime(active)} – ~${fmtTime(end)}`,
+        label: `Siesta ${n} (en curso)`,
+        at: active,
+        until: end,
+      });
+      t = end;
+    }
+
+    const bed = timeAt(now, baby.bedTime || "20:00");
+    const latestNapEnd = new Date(bed.getTime() - win.min * 60000);
+    while (n < win.naps) {
       const start = new Date(t.getTime() + ((win.min + win.max) / 2) * 60000);
       const end = new Date(start.getTime() + win.napAvg * 60000);
+      if (end > latestNapEnd) break;
+      n++;
       items.push({
         icon: "😴",
         time: `${fmtTime(start)} – ${fmtTime(end)}`,
-        label: `Siesta ${i}`,
+        label: `Siesta ${n}`,
         at: start,
         until: end,
         nap: true,
@@ -406,7 +586,6 @@
       t = end;
     }
 
-    const bed = timeAt(new Date(), currentBaby().bedTime || "20:00");
     items.push({ icon: "🌙", time: fmtTime(bed), label: "A dormir (noche)", at: bed });
     return items;
   }
@@ -421,9 +600,12 @@
       .map((it, idx) => {
         const past = (it.until || it.at) < now;
         const current = it.at <= now && now <= (it.until || it.at);
-        const clickable = it.nap;
+        const clickable = it.nap || it.sessionId;
+        const data = it.sessionId
+          ? `data-id="${it.sessionId}"`
+          : it.nap ? `data-start="${it.at.toISOString()}" data-end="${it.until.toISOString()}"` : "";
         return `<div class="sched-item ${past ? "past" : ""} ${current ? "current" : ""} ${clickable ? "sched-clickable" : ""}"
-          ${clickable ? `data-idx="${idx}" data-start="${it.at.toISOString()}" data-end="${it.until.toISOString()}"` : ""}>
+          ${data}>
           <div class="sched-icon">${it.icon}</div>
           <div class="sched-time">${it.time}</div>
           <div>${it.label}</div>
@@ -434,6 +616,7 @@
 
     $$(".sched-clickable").forEach((item) =>
       item.addEventListener("click", () => {
+        if (item.dataset.id) return openModal(item.dataset.id);
         const predStart = new Date(item.dataset.start);
         const predEnd = new Date(item.dataset.end);
         const existing = sessionsOverlappingDay(predStart)
@@ -478,7 +661,7 @@
       const a = new Date(baby.activeSleep.start);
       const from = a < day ? day : a;
       const to = new Date();
-      if (to > from) segments.push({ start: from, end: to, type: suggestType(a), active: true });
+      if (to > from) segments.push({ start: from, end: to, type: activeSleepType(baby), active: true });
     }
     return segments;
   }
@@ -539,13 +722,15 @@
     const activeSleep = currentBaby().activeSleep;
     if (activeSleep) {
       const mins = (Date.now() - new Date(activeSleep.start)) / 60000;
-      const t = suggestType(new Date(activeSleep.start));
+      const t = activeSleepType(currentBaby());
       if (t === "nap") nap += mins; else night += mins;
     }
+    const night0 = lastNight();
     $("#today-summary").innerHTML = `
       <div><div class="num">${fmtDur(nap + night)}</div><div class="lbl">Total</div></div>
       <div><div class="num">${napsCount}</div><div class="lbl">Siestas</div></div>
-      <div><div class="num">${fmtDur(night)}</div><div class="lbl">Noche</div></div>`;
+      <div><div class="num">${fmtDur(night)}</div><div class="lbl">Noche</div></div>
+      <div><div class="num">${night0 ? night0.wakings : "—"}</div><div class="lbl">Despertares</div></div>`;
   }
 
   function renderCareSummary() {
@@ -684,9 +869,23 @@
   }
 
   // ---------- Render: estadísticas ----------
+  let statsRange = 7;
+
+  // Media de horas del día; con wrapAt se tratan como «después de medianoche»
+  // las horas anteriores a ese minuto (p. ej. acostarse a las 00:30).
+  function avgClockTime(dates, wrapAt = 0) {
+    if (!dates.length) return "—";
+    const mins = dates.map((d) => {
+      const m = d.getHours() * 60 + d.getMinutes();
+      return m < wrapAt ? m + 1440 : m;
+    });
+    const avg = Math.round(mins.reduce((a, m) => a + m, 0) / mins.length) % 1440;
+    return `${pad(Math.floor(avg / 60))}:${pad(avg % 60)}`;
+  }
+
   function renderStats() {
     const days = [];
-    for (let i = 6; i >= 0; i--) {
+    for (let i = statsRange - 1; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
       days.push(d);
@@ -700,18 +899,22 @@
       return { d, nap, night, total: nap + night };
     });
     const maxTotal = Math.max(60, ...data.map((x) => x.total));
+    const compact = statsRange > 7;
 
+    $("#stats-title").textContent = `Últimos ${statsRange} días`;
+    $("#chart").classList.toggle("chart-compact", compact);
     $("#chart").innerHTML = data
-      .map((x) => {
+      .map((x, i) => {
         const napH = Math.round((x.nap / maxTotal) * 120);
         const nightH = Math.round((x.night / maxTotal) * 120);
-        return `<div class="chart-col">
-          <div class="chart-val">${x.total ? (x.total / 60).toFixed(1) : ""}</div>
+        const label = compact ? ((data.length - 1 - i) % 5 === 0 ? x.d.getDate() : "") : dayNames[x.d.getDay()];
+        return `<div class="chart-col" title="${x.d.getDate()}/${x.d.getMonth() + 1}: ${fmtDur(x.total)}">
+          <div class="chart-val">${!compact && x.total ? (x.total / 60).toFixed(1) : ""}</div>
           <div class="chart-bars">
             <div class="bar-night" style="height:${nightH}px"></div>
             <div class="bar-nap" style="height:${napH}px"></div>
           </div>
-          <div class="chart-label">${dayNames[x.d.getDay()]}</div>
+          <div class="chart-label">${label}</div>
         </div>`;
       })
       .join("");
@@ -719,15 +922,24 @@
     const withData = data.filter((x) => x.total > 0);
     const avgTotal = withData.length ? withData.reduce((a, x) => a + x.total, 0) / withData.length : 0;
     const avgNight = withData.length ? withData.reduce((a, x) => a + x.night, 0) / withData.length : 0;
-    const napsLast7 = days.reduce(
+    const naps = days.reduce(
       (acc, d) => acc + sessionsOverlappingDay(d).filter(([s]) => s.type === "nap").length, 0);
     const longest = currentBaby().sessions.reduce(
       (acc, s) => Math.max(acc, (new Date(s.end) - new Date(s.start)) / 60000), 0);
 
+    const rangeStart = new Date(days[0]); rangeStart.setHours(0, 0, 0, 0);
+    const nights = groupNights(currentBaby().sessions).filter((n) => n.end >= rangeStart && n.end <= new Date());
+    const avgWakings = nights.length
+      ? (nights.reduce((a, n) => a + n.wakings, 0) / nights.length).toFixed(1).replace(".", ",")
+      : "—";
+
     $("#stats-cards").innerHTML = `
-      <div class="stat-card"><div class="num">${fmtDur(avgTotal)}</div><div class="lbl">Media diaria (7 d)</div></div>
+      <div class="stat-card"><div class="num">${fmtDur(avgTotal)}</div><div class="lbl">Media diaria</div></div>
       <div class="stat-card"><div class="num">${fmtDur(avgNight)}</div><div class="lbl">Media nocturna</div></div>
-      <div class="stat-card"><div class="num">${napsLast7}</div><div class="lbl">Siestas (7 d)</div></div>
+      <div class="stat-card"><div class="num">${naps}</div><div class="lbl">Siestas (${statsRange} d)</div></div>
+      <div class="stat-card"><div class="num">${avgWakings}</div><div class="lbl">Despertares por noche</div></div>
+      <div class="stat-card"><div class="num">${avgClockTime(nights.map((n) => n.start), 12 * 60)}</div><div class="lbl">Hora media de acostarse</div></div>
+      <div class="stat-card"><div class="num">${avgClockTime(nights.map((n) => n.end))}</div><div class="lbl">Hora media de despertar</div></div>
       <div class="stat-card"><div class="num">${fmtDur(longest)}</div><div class="lbl">Tramo más largo</div></div>`;
   }
 
@@ -746,6 +958,7 @@
       `Ventana de vigilia ${fmtDur(w.min)} – ${fmtDur(w.max)}, ` +
       `${w.naps} siesta${w.naps === 1 ? "" : "s"} al día aprox. (${source}, edad: ${ageLabel()})`;
     renderBabyList();
+    renderNotifySettings();
   }
 
   function renderBabyList() {
@@ -754,7 +967,7 @@
       .map((b) => {
         const active = b.id === state.activeBabyId;
         return `<div class="baby-row ${active ? "active" : ""}">
-          <div class="baby-row-name">${b.name}${active ? " · activo" : ""}</div>
+          <div class="baby-row-name">${escapeHtml(b.name)}${active ? " · activo" : ""}</div>
           <div class="baby-row-actions">
             ${active ? "" : `<button class="btn-ghost" data-switch="${b.id}">Usar</button>`}
             ${state.babies.length > 1 ? `<button class="btn-danger" data-delete="${b.id}">Eliminar</button>` : ""}
@@ -783,7 +996,7 @@
   }
 
   // ---------- Sonidos (Web Audio) ----------
-  const sound = { ctx: null, node: null, extraNodes: [], gain: null, current: null, timerId: null, offAt: null };
+  const sound = { ctx: null, sources: [], gain: null, current: null, timerId: null, offAt: null };
 
   function makeNoiseBuffer(ctx, type) {
     const len = ctx.sampleRate * 2;
@@ -815,6 +1028,46 @@
     return buffer;
   }
 
+  function envelopeAt(env, t) {
+    for (let i = 1; i < env.length; i++) {
+      const [t0, v0] = env[i - 1], [t1, v1] = env[i];
+      if (t <= t1) return t1 === t0 ? v1 : v0 + ((v1 - v0) * (t - t0)) / (t1 - t0);
+    }
+    return 0;
+  }
+
+  // Sonidos con notas o golpes sueltos: se renderizan en un buffer que luego
+  // se reproduce en bucle, así nunca se acaban (con o sin temporizador).
+  // Cada evento debe terminar antes del final del buffer para que el bucle no haga clic.
+  function makeEventBuffer(ctx, seconds, events) {
+    const sr = ctx.sampleRate;
+    const buffer = ctx.createBuffer(1, Math.round(sr * seconds), sr);
+    const out = buffer.getChannelData(0);
+    for (const ev of events) {
+      const from = Math.round(ev.at * sr);
+      const len = Math.min(Math.round(ev.dur * sr), out.length - from);
+      for (let i = 0; i < len; i++) {
+        const t = i / sr;
+        let v;
+        if (ev.wave === "noise") v = Math.random() * 2 - 1;
+        else if (ev.wave === "triangle") v = (2 / Math.PI) * Math.asin(Math.sin(2 * Math.PI * ev.freq * t));
+        else v = Math.sin(2 * Math.PI * ev.freq * t);
+        out[from + i] += v * envelopeAt(ev.env, t);
+      }
+    }
+    return buffer;
+  }
+
+  function loopSource(ctx, buffer, destination) {
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+    src.connect(destination);
+    src.start();
+    sound.sources.push(src);
+    return src;
+  }
+
   function startSound(type) {
     stopSound(false);
     sound.ctx = sound.ctx || new (window.AudioContext || window.webkitAudioContext)();
@@ -826,140 +1079,69 @@
     sound.gain.connect(ctx.destination);
 
     if (type === "heartbeat") {
-      // Latido: oscilador grave con pulsos lub-dub mediante LFO de ganancia.
-      const osc = ctx.createOscillator();
-      osc.type = "sine";
-      osc.frequency.value = 55;
-      const beatGain = ctx.createGain();
-      beatGain.gain.value = 0;
-      osc.connect(beatGain).connect(sound.gain);
-      osc.start();
-      const period = 60 / 65; // ~65 ppm
-      const t0 = ctx.currentTime + 0.05;
-      for (let i = 0; i < 600; i++) {
-        const t = t0 + i * period;
-        beatGain.gain.setValueAtTime(0, t);
-        beatGain.gain.linearRampToValueAtTime(1, t + 0.05);
-        beatGain.gain.linearRampToValueAtTime(0, t + 0.18);
-        beatGain.gain.setValueAtTime(0, t + 0.25);
-        beatGain.gain.linearRampToValueAtTime(0.7, t + 0.3);
-        beatGain.gain.linearRampToValueAtTime(0, t + 0.42);
-      }
-      sound.node = osc;
+      // Un latido "lub-dub" a ~65 ppm; el buffer dura exactamente un periodo.
+      const buf = makeEventBuffer(ctx, 60 / 65, [{ at: 0, dur: 0.45, freq: 55, wave: "sine",
+        env: [[0, 0], [0.05, 1], [0.18, 0], [0.25, 0], [0.3, 0.7], [0.42, 0]] }]);
+      loopSource(ctx, buf, sound.gain);
     } else if (type === "rain") {
       // Base de fondo: ruido blanco filtrado en banda (efecto "pattering").
-      const bedSrc = ctx.createBufferSource();
-      bedSrc.buffer = makeNoiseBuffer(ctx, "white");
-      bedSrc.loop = true;
       const bedFilter = ctx.createBiquadFilter();
       bedFilter.type = "bandpass";
       bedFilter.frequency.value = 1200;
       bedFilter.Q.value = 0.5;
       const bedGain = ctx.createGain();
       bedGain.gain.value = 0.35;
-      bedSrc.connect(bedFilter).connect(bedGain).connect(sound.gain);
-      bedSrc.start();
+      bedFilter.connect(bedGain).connect(sound.gain);
+      loopSource(ctx, makeNoiseBuffer(ctx, "white"), bedFilter);
 
-      // Gotas: ráfagas de ruido agudo con envolvente, sobre la misma base.
-      const dripSrc = ctx.createBufferSource();
-      dripSrc.buffer = makeNoiseBuffer(ctx, "white");
-      dripSrc.loop = true;
+      // Gotas: ráfagas cortas de ruido agudo repartidas al azar.
+      const drips = [];
+      for (let t = 0.05; t < 19.8; t += 0.08 + Math.random() * 0.28) {
+        const dur = 0.03 + Math.random() * 0.05;
+        drips.push({ at: t, dur, wave: "noise",
+          env: [[0, 0], [0.008, 0.25 + Math.random() * 0.5], [dur, 0]] });
+      }
       const dripFilter = ctx.createBiquadFilter();
       dripFilter.type = "highpass";
       dripFilter.frequency.value = 2500;
-      const dripGain = ctx.createGain();
-      dripGain.gain.value = 0;
-      dripSrc.connect(dripFilter).connect(dripGain).connect(sound.gain);
-      dripSrc.start();
-
-      let t = ctx.currentTime + 0.05;
-      for (let i = 0; i < 4000; i++) {
-        const peak = 0.25 + Math.random() * 0.5;
-        const dur = 0.03 + Math.random() * 0.05;
-        dripGain.gain.setValueAtTime(0, t);
-        dripGain.gain.linearRampToValueAtTime(peak, t + 0.008);
-        dripGain.gain.linearRampToValueAtTime(0, t + dur);
-        t += 0.08 + Math.random() * 0.28;
-      }
-      sound.node = bedSrc;
-      sound.extraNodes = [dripSrc];
+      dripFilter.connect(sound.gain);
+      loopSource(ctx, makeEventBuffer(ctx, 20, drips), dripFilter);
     } else if (type === "forest") {
       // Viento de fondo: ruido marrón muy filtrado.
-      const windSrc = ctx.createBufferSource();
-      windSrc.buffer = makeNoiseBuffer(ctx, "brown");
-      windSrc.loop = true;
       const windFilter = ctx.createBiquadFilter();
       windFilter.type = "lowpass";
       windFilter.frequency.value = 350;
       const windGain = ctx.createGain();
       windGain.gain.value = 0.6;
-      windSrc.connect(windFilter).connect(windGain).connect(sound.gain);
-      windSrc.start();
+      windFilter.connect(windGain).connect(sound.gain);
+      loopSource(ctx, makeNoiseBuffer(ctx, "brown"), windFilter);
 
-      // Pájaros: un único oscilador con frecuencia y ganancia automatizadas
-      // por cada gorjeo, espaciados de forma aleatoria.
-      const chirpOsc = ctx.createOscillator();
-      chirpOsc.type = "sine";
-      chirpOsc.frequency.value = 1800;
-      const chirpGain = ctx.createGain();
-      chirpGain.gain.value = 0;
-      chirpOsc.connect(chirpGain).connect(sound.gain);
-      chirpOsc.start();
-
+      // Pájaros: gorjeos de 2-3 notas espaciados de forma aleatoria.
       const basePitches = [1600, 1900, 2200, 1750];
-      let ct = ctx.currentTime + 1;
-      for (let i = 0; i < 150; i++) {
+      const chirps = [];
+      for (let t = 1; t < 38; t += 3 + Math.random() * 6) {
         const base = basePitches[Math.floor(Math.random() * basePitches.length)];
         const notes = 2 + Math.floor(Math.random() * 2);
-        let nt = ct;
-        for (let n = 0; n < notes; n++) {
-          const freq = base * (0.95 + Math.random() * 0.1);
-          chirpOsc.frequency.setValueAtTime(freq, nt);
-          chirpGain.gain.setValueAtTime(0, nt);
-          chirpGain.gain.linearRampToValueAtTime(0.22, nt + 0.02);
-          chirpGain.gain.linearRampToValueAtTime(0, nt + 0.09);
-          nt += 0.12;
+        for (let n = 0; n < notes; n++, t += 0.12) {
+          chirps.push({ at: t, dur: 0.09, wave: "sine", freq: base * (0.95 + Math.random() * 0.1),
+            env: [[0, 0], [0.02, 0.22], [0.09, 0]] });
         }
-        ct = nt + 3 + Math.random() * 6;
       }
-      sound.node = windSrc;
-      sound.extraNodes = [chirpOsc];
+      loopSource(ctx, makeEventBuffer(ctx, 40, chirps), sound.gain);
     } else if (type === "lullaby") {
-      // Nana sencilla: un oscilador con una breve frase en escala pentatónica
-      // que se repite, automatizando frecuencia y ganancia nota a nota.
-      const osc = ctx.createOscillator();
-      osc.type = "triangle";
-      osc.frequency.value = 440;
-      const noteGain = ctx.createGain();
-      noteGain.gain.value = 0;
-      osc.connect(noteGain).connect(sound.gain);
-      osc.start();
-
+      // Nana sencilla: una frase en escala pentatónica seguida de una pausa.
       const scale = [261.63, 293.66, 329.63, 392.0, 440.0, 523.25];
       const melody = [0, 2, 4, 2, 0, 3, 2, 0];
       const noteDur = 0.6;
-      let lt = ctx.currentTime + 0.1;
-      for (let rep = 0; rep < 150; rep++) {
-        for (const idx of melody) {
-          osc.frequency.setValueAtTime(scale[idx], lt);
-          noteGain.gain.setValueAtTime(0, lt);
-          noteGain.gain.linearRampToValueAtTime(0.3, lt + 0.08);
-          noteGain.gain.linearRampToValueAtTime(0, lt + noteDur * 0.9);
-          lt += noteDur;
-        }
-        lt += 0.4;
-      }
-      sound.node = osc;
+      const notes = melody.map((idx, i) => ({ at: i * noteDur, dur: noteDur * 0.9, wave: "triangle",
+        freq: scale[idx], env: [[0, 0], [0.08, 0.3], [noteDur * 0.9, 0]] }));
+      loopSource(ctx, makeEventBuffer(ctx, melody.length * noteDur + 0.4, notes), sound.gain);
     } else {
-      const src = ctx.createBufferSource();
-      src.buffer = makeNoiseBuffer(ctx, type);
-      src.loop = true;
       const filter = ctx.createBiquadFilter();
       filter.type = "lowpass";
       filter.frequency.value = type === "brown" ? 500 : 4000;
-      src.connect(filter).connect(sound.gain);
-      src.start();
-      sound.node = src;
+      filter.connect(sound.gain);
+      loopSource(ctx, makeNoiseBuffer(ctx, type), filter);
     }
 
     sound.current = type;
@@ -974,9 +1156,8 @@
   }
 
   function stopSound(updateUI = true) {
-    if (sound.node) { try { sound.node.stop(); } catch (e) {} sound.node = null; }
-    sound.extraNodes.forEach((n) => { try { n.stop(); } catch (e) {} });
-    sound.extraNodes = [];
+    sound.sources.forEach((n) => { try { n.stop(); } catch (e) {} });
+    sound.sources = [];
     if (sound.gain) { sound.gain.disconnect(); sound.gain = null; }
     if (sound.timerId) { clearTimeout(sound.timerId); sound.timerId = null; }
     sound.current = null;
@@ -994,6 +1175,86 @@
     if (!sound.current) st.textContent = "Sin sonido";
     else if (sound.offAt) st.textContent = `Reproduciendo · se apaga a las ${fmtTime(new Date(sound.offAt))}`;
     else st.textContent = "Reproduciendo";
+  }
+
+  // ---------- Avisos de siesta y hora de dormir ----------
+  // Sin servidor de push: los avisos salen mientras la app esté abierta o en
+  // segundo plano en este dispositivo, y solo para el bebé activo.
+  const REMINDER_GRACE_MS = 15 * 60000;
+
+  function upcomingReminders() {
+    const baby = currentBaby();
+    if (baby.activeSleep) return [];
+    const now = new Date();
+    const lead = state.settings.notifyLead * 60000;
+    const bed = timeAt(now, baby.bedTime || "20:00");
+    const out = [];
+    if (!inNightWaking() && suggestType(now) === "nap") {
+      const wake = lastWakeTime();
+      const from = new Date(wake.getTime() + windowsForAge().min * 60000);
+      if (wake <= now && from < bed) {
+        out.push({
+          key: `nap-${baby.id}-${wake.toISOString()}`,
+          at: from.getTime() - lead,
+          title: `Siesta de ${baby.name}`,
+          body: `La ventana de sueño empieza a las ${fmtTime(from)}.`,
+        });
+      }
+    }
+    out.push({
+      key: `bed-${baby.id}-${dayKey(now)}`,
+      at: bed.getTime() - lead,
+      title: `Hora de dormir de ${baby.name}`,
+      body: `A dormir a las ${fmtTime(bed)}.`,
+    });
+    return out;
+  }
+
+  function showReminder({ title, body, key }) {
+    const opts = { body, tag: key, icon: "icon-192.png" };
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.ready
+        .then((reg) => reg.showNotification(title, opts))
+        .catch(() => new Notification(title, opts));
+    } else {
+      new Notification(title, opts);
+    }
+  }
+
+  function checkReminders() {
+    if (!state.settings.notify || !("Notification" in window) || Notification.permission !== "granted") return;
+    const now = Date.now();
+    for (const r of upcomingReminders()) {
+      // Pasado el margen no se avisa, para no lanzar avisos atrasados al abrir la app.
+      if (now < r.at || now > r.at + REMINDER_GRACE_MS || state.notified.includes(r.key)) continue;
+      state.notified = [...state.notified, r.key].slice(-30);
+      save();
+      showReminder(r);
+    }
+  }
+
+  async function setNotify(enabled) {
+    if (enabled) {
+      if (!("Notification" in window)) {
+        alert("Este navegador no permite mostrar avisos.");
+        enabled = false;
+      } else if (Notification.permission !== "granted") {
+        const permission = await Notification.requestPermission();
+        if (permission !== "granted") {
+          alert("Sin permiso del navegador no se pueden mostrar avisos.");
+          enabled = false;
+        }
+      }
+    }
+    state.settings.notify = enabled;
+    save();
+    renderNotifySettings();
+  }
+
+  function renderNotifySettings() {
+    $("#notify-enabled").checked = state.settings.notify;
+    $("#notify-lead").value = String(state.settings.notifyLead);
+    $("#notify-lead").disabled = !state.settings.notify;
   }
 
   // ---------- Modal de sesión ----------
@@ -1030,6 +1291,23 @@
   function closeModal() {
     $("#modal").classList.add("hidden");
     editingId = null;
+    if (modalTrigger) { modalTrigger.focus(); modalTrigger = null; }
+  }
+
+  // ---------- Modal de sueño en curso ----------
+  function openActiveModal() {
+    const baby = currentBaby();
+    if (!baby.activeSleep) return;
+    modalTrigger = document.activeElement;
+    $("#active-start").value = toLocalInput(new Date(baby.activeSleep.start));
+    $("#active-start").max = toLocalInput(new Date());
+    $("#active-type").value = activeSleepType(baby);
+    $("#active-modal").classList.remove("hidden");
+    $("#active-start").focus();
+  }
+
+  function closeActiveModal() {
+    $("#active-modal").classList.add("hidden");
     if (modalTrigger) { modalTrigger.focus(); modalTrigger = null; }
   }
 
@@ -1144,6 +1422,7 @@
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
       if (!$("#modal").classList.contains("hidden")) closeModal();
+      else if (!$("#active-modal").classList.contains("hidden")) closeActiveModal();
       else if (!$("#feed-modal").classList.contains("hidden")) closeFeedModal();
       else if (!$("#diaper-modal").classList.contains("hidden")) closeDiaperModal();
     });
@@ -1175,14 +1454,32 @@
             id: crypto.randomUUID(),
             start: start.toISOString(),
             end: end.toISOString(),
-            type: suggestType(start),
+            type: activeSleepType(baby),
           });
         }
         baby.activeSleep = null;
       } else {
-        baby.activeSleep = { start: new Date().toISOString() };
+        const start = new Date();
+        baby.activeSleep = { start: start.toISOString(), type: typeForNewSleep(start) };
       }
       save();
+      renderAll();
+    });
+
+    // Corregir el sueño en curso
+    $("#edit-active").addEventListener("click", openActiveModal);
+    $("#active-cancel").addEventListener("click", closeActiveModal);
+    $("#active-modal").addEventListener("click", (e) => {
+      if (e.target.id === "active-modal") closeActiveModal();
+    });
+    $("#active-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const baby = currentBaby();
+      const start = new Date($("#active-start").value);
+      if (!(start <= new Date())) { alert("La hora de inicio no puede ser futura."); return; }
+      baby.activeSleep = { start: start.toISOString(), type: $("#active-type").value };
+      save();
+      closeActiveModal();
       renderAll();
     });
 
@@ -1210,6 +1507,19 @@
       })
     );
 
+    // Rango de estadísticas
+    $$(".range-btn").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        statsRange = Number(btn.dataset.range);
+        $$(".range-btn").forEach((b) => {
+          const active = b === btn;
+          b.classList.toggle("active", active);
+          b.setAttribute("aria-pressed", String(active));
+        });
+        renderStats();
+      })
+    );
+
     // Acciones rápidas (Hoy)
     $("#quick-feed").addEventListener("click", () => openFeedModal());
     $("#quick-diaper").addEventListener("click", () => openDiaperModal());
@@ -1232,7 +1542,7 @@
       }
       const baby = currentBaby();
       if (editingFeedId) {
-        Object.assign(baby.feedings.find((f) => f.id === editingFeedId), data);
+        baby.feedings = baby.feedings.map((f) => (f.id === editingFeedId ? { id: f.id, ...data } : f));
       } else {
         baby.feedings.push({ id: crypto.randomUUID(), ...data });
       }
@@ -1353,13 +1663,56 @@
       renderAll();
     });
 
-    $("#export-data").addEventListener("click", () => {
-      const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+    // Avisos
+    $("#notify-enabled").addEventListener("change", (e) => setNotify(e.target.checked));
+    $("#notify-lead").addEventListener("change", (e) => {
+      state.settings.notifyLead = Number(e.target.value);
+      save();
+    });
+
+    // Exportar, compartir e importar
+    const exportJson = () => JSON.stringify({ babies: state.babies, activeBabyId: state.activeBabyId }, null, 2);
+    const downloadJson = (json) => {
+      const blob = new Blob([json], { type: "application/json" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = "lunara-datos.json";
       a.click();
       URL.revokeObjectURL(a.href);
+    };
+    $("#export-data").addEventListener("click", () => downloadJson(exportJson()));
+    $("#share-data").addEventListener("click", async () => {
+      const json = exportJson();
+      const file = new File([json], "lunara-datos.json", { type: "application/json" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file], title: "Datos de Lunara" });
+          return;
+        } catch (err) {
+          if (err.name === "AbortError") return;
+        }
+      }
+      downloadJson(json);
+    });
+    $("#import-data").addEventListener("click", () => $("#import-file").click());
+    $("#onb-import").addEventListener("click", () => $("#import-file").click());
+    $("#import-file").addEventListener("change", async (e) => {
+      const file = e.target.files[0];
+      e.target.value = "";
+      if (!file) return;
+      let incoming;
+      try {
+        incoming = parseImport(await file.text());
+      } catch (err) {
+        alert("El archivo no es una copia de datos de Lunara válida.");
+        return;
+      }
+      const added = mergeImported(incoming);
+      save();
+      $("#onboarding").classList.add("hidden");
+      $("#main").classList.remove("hidden");
+      renderAll();
+      alert(`Datos importados: ${added.babies} bebé(s) nuevo(s) y ${added.records} registro(s) nuevo(s).`);
     });
     $("#reset-data").addEventListener("click", () => {
       if (!confirm("Esto borrará todos los bebés y sus registros de este dispositivo. ¿Continuar?")) return;
@@ -1376,6 +1729,7 @@
     if (currentBaby()) {
       renderSleepCard();
       renderTodaySummary();
+      checkReminders();
     }
   }
 
